@@ -3550,6 +3550,7 @@ static inline int check_section_show_entries(int section_id)
 
 int main(int argc, char **argv)
 {
+    printf("Hello World\n");
     const Writer *w;
     WriterContext *wctx;
     char *buf;
