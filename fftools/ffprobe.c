@@ -78,8 +78,50 @@ typedef struct InputFile {
     int       nb_streams;
 } InputFile;
 
+typedef struct SCTE35ParseSection {
+    int table_id;
+    int section_syntax_indicator;
+    int private_indicator;
+    int reserved;
+    int section_length;
+    int protocol_version;
+    int encrypted_packet;
+    int encryption_algorithm;
+    uint64_t pts_adjustment;
+    int cw_index;
+    int tier;
+    int splice_command_length;
+    int splice_command_type;
+    int descriptor_loop_length;
+    int num_alignment_bytes;
+    uint32_t e_crc;
+    uint32_t crc;
+} SCTE35ParseSection;
+
+static void scte35_parse_init(SCTE35ParseSection *scte35_ptr)
+{
+    scte35_ptr->table_id = -1;
+    scte35_ptr->section_syntax_indicator = -1;
+    scte35_ptr->private_indicator = -1;
+    scte35_ptr->reserved = -1;
+    scte35_ptr->section_length = -1;
+    scte35_ptr->protocol_version = -1;
+    scte35_ptr->encryption_algorithm = -1;
+    scte35_ptr->pts_adjustment = 0;
+    scte35_ptr->cw_index = -1;
+    scte35_ptr->tier = -1;
+    scte35_ptr->splice_command_length = -1;
+    scte35_ptr->splice_command_type = -1;
+    scte35_ptr->descriptor_loop_length = -1;
+    scte35_ptr->num_alignment_bytes = -1;
+    scte35_ptr->e_crc = 0;
+    scte35_ptr->crc = 0;
+}
+
 const char program_name[] = "ffprobe";
 const int program_birth_year = 2007;
+
+static int packet_count = 0;
 
 static int do_bitexact = 0;
 static int do_count_frames = 0;
@@ -2273,7 +2315,6 @@ static av_always_inline int process_frame(WriterContext *w,
                 }
             }
             break;
-
         case AVMEDIA_TYPE_SUBTITLE:
             if (*packet_new)
                 ret = avcodec_decode_subtitle2(dec_ctx, &sub, &got_frame, pkt);
@@ -2283,12 +2324,16 @@ static av_always_inline int process_frame(WriterContext *w,
             *packet_new = 0;
         }
     } else {
+	if (par->codec_type == AVMEDIA_TYPE_DATA) {
+      	    printf("\nSCTE-35 detected in process_frame\n");
+	}
         *packet_new = 0;
     }
 
     if (ret < 0)
         return ret;
     if (got_frame) {
+	
         int is_sub = (par->codec_type == AVMEDIA_TYPE_SUBTITLE);
         nb_streams_frames[pkt->stream_index]++;
         if (do_show_frames)
@@ -2324,6 +2369,12 @@ static void log_read_interval(const ReadInterval *interval, void *log_ctx, int l
     }
 
     av_log(log_ctx, log_level, "\n");
+}
+
+static int parse_SCTE35(AVPacket *pkt, SCTE35ParseSection *scte35_ptr)
+{
+    printf("\nHi\n"); 
+    return 0;
 }
 
 static int read_interval_packets(WriterContext *w, InputFile *ifile,
@@ -2371,6 +2422,7 @@ static int read_interval_packets(WriterContext *w, InputFile *ifile,
         goto end;
     }
     while (!av_read_frame(fmt_ctx, &pkt)) {
+	packet_count++;
         if (fmt_ctx->nb_streams > nb_streams) {
             REALLOCZ_ARRAY_STREAM(nb_streams_frames,  nb_streams, fmt_ctx->nb_streams);
             REALLOCZ_ARRAY_STREAM(nb_streams_packets, nb_streams, fmt_ctx->nb_streams);
@@ -2378,6 +2430,13 @@ static int read_interval_packets(WriterContext *w, InputFile *ifile,
             nb_streams = fmt_ctx->nb_streams;
         }
         if (selected_streams[pkt.stream_index]) {
+	    int ret_scte35 = 0;
+	    if (pkt.stream_index == 3) {
+		SCTE35ParseSection scte35_parse;
+		scte35_parse_init(&scte35_parse);
+		ret_scte35 = parse_SCTE35(&pkt, &scte35_parse);
+	    }
+
             AVRational tb = ifile->streams[pkt.stream_index].st->time_base;
 
             if (pkt.pts != AV_NOPTS_VALUE)
@@ -2399,7 +2458,7 @@ static int read_interval_packets(WriterContext *w, InputFile *ifile,
             } else if (has_end && *cur_ts != AV_NOPTS_VALUE && *cur_ts >= end) {
                 break;
             }
-
+	
             frame_count++;
             if (do_read_packets) {
                 if (do_show_packets)
