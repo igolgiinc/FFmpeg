@@ -53,6 +53,7 @@
 #include "cmdutils.h"
 
 #include "libavutil/thread.h"
+#include "scte35.h"
 
 #if !HAVE_THREADS
 #  ifdef pthread_mutex_lock
@@ -77,46 +78,6 @@ typedef struct InputFile {
     InputStream *streams;
     int       nb_streams;
 } InputFile;
-
-typedef struct SCTE35ParseSection {
-    int table_id;
-    int section_syntax_indicator;
-    int private_indicator;
-    int reserved;
-    int section_length;
-    int protocol_version;
-    int encrypted_packet;
-    int encryption_algorithm;
-    uint64_t pts_adjustment;
-    int cw_index;
-    int tier;
-    int splice_command_length;
-    int splice_command_type;
-    int descriptor_loop_length;
-    int num_alignment_bytes;
-    uint32_t e_crc;
-    uint32_t crc;
-} SCTE35ParseSection;
-
-static void scte35_parse_init(SCTE35ParseSection *scte35_ptr)
-{
-    scte35_ptr->table_id = -1;
-    scte35_ptr->section_syntax_indicator = -1;
-    scte35_ptr->private_indicator = -1;
-    scte35_ptr->reserved = -1;
-    scte35_ptr->section_length = -1;
-    scte35_ptr->protocol_version = -1;
-    scte35_ptr->encryption_algorithm = -1;
-    scte35_ptr->pts_adjustment = 0;
-    scte35_ptr->cw_index = -1;
-    scte35_ptr->tier = -1;
-    scte35_ptr->splice_command_length = -1;
-    scte35_ptr->splice_command_type = -1;
-    scte35_ptr->descriptor_loop_length = -1;
-    scte35_ptr->num_alignment_bytes = -1;
-    scte35_ptr->e_crc = 0;
-    scte35_ptr->crc = 0;
-}
 
 const char program_name[] = "ffprobe";
 const int program_birth_year = 2007;
@@ -2373,7 +2334,113 @@ static void log_read_interval(const ReadInterval *interval, void *log_ctx, int l
 
 static int parse_SCTE35(AVPacket *pkt, SCTE35ParseSection *scte35_ptr)
 {
-    printf("\nHi\n"); 
+    int rc = 0;
+    int nr = -1;
+    int nl = -1;
+    int remaining_byte_count;
+    unsigned char *pdat;
+	
+    unsigned char *data_ptr = pkt->data;
+    scte35_ptr->table_id = (int)data_ptr[0];
+    if (scte35_ptr->table_id != 0xfc)
+        return -1;
+
+    scte35_ptr->section_syntax_indicator = ((int)data_ptr[1] >> 7) & 1;
+    scte35_ptr->private_indicator = ((int)data_ptr[1] >> 6) & 1;
+    scte35_ptr->section_length = (((int)data_ptr[1] & 0x0f) << 4) + (int)data_ptr[2];
+    scte35_ptr->protocol_version = (int)data_ptr[3];
+    scte35_ptr->encrypted_packet = ((int)data_ptr[4] >> 7) & 1;
+    scte35_ptr->encryption_algorithm = ((int)data_ptr[4] >> 1) & 1;
+    scte35_ptr->pts_adjustment = (((uint64_t)data_ptr[4] & 0x01) << 32) + 
+	                         (((uint64_t)data_ptr[5] & 0xff) << 24) +
+				 (((uint64_t)data_ptr[6] & 0xff) << 16) + 
+				 (((uint64_t)data_ptr[7] & 0xff) <<  8) +
+				 ((uint64_t)data_ptr[8] & 0xff);
+    scte35_ptr->cw_index = (int)data_ptr[9];
+    scte35_ptr->tier = (((uint32_t)data_ptr[10] & 0xff) << 4) +
+	               (((uint32_t)data_ptr[11] & 0xf0) >> 4);
+    scte35_ptr->splice_command_length = (((uint32_t)data_ptr[11] & 0x0f) << 8) +
+	                                ((uint32_t)data_ptr[12] & 0xff);
+    scte35_ptr->splice_command_type = (int)data_ptr[13];
+
+    switch (scte35_ptr->splice_command_type){
+        case SCTE35_CMD_NULL:
+	    rc = 0;
+	    break;
+	case SCTE35_CMD_SCHEDULE:
+	    // rc = SCTE35_MP_ERR_UNSUPPORTED_CMD; 
+	    break;
+	case SCTE35_CMD_INSERT:
+	     nr = parse_insert(&data_ptr[SPLICE_INFO_FIXED_SIZE], data_ptr, scte35_ptr);
+	    /* if (nr > pmsg->splice_command_length) {
+	     *     // print too many bytes for splice insert
+	     * }
+	    */
+	    break;
+	case SCTE35_CMD_TIME_SIGNAL:
+	    /*nr = parse_time_signal(&data_ptr[SPLICE_INFO_FIXED_SIZE], data_ptr, scte35_ptr);
+	     
+	     * if (nr > pmsg->splice_command_length) {
+	     *     // print too many bytes for time signal
+	     * }
+	    */
+	    break;
+	case SCTE35_CMD_BW_RESERVATION:
+	    //rc = SCTE35_MP_ERR_UNSUPPORTED_CMD;
+	    break;
+	case SCTE35_CMD_PRIVATE_CMD:
+	    //rc = SCTE35_MP_ERR_UNSUPPORTED_CMD;
+	    break;
+	default:	
+	    //rc = SCTE35_MP_ERR_UNSUPPORTED_CMD;
+	    break;
+    }
+
+    if (rc)
+	return rc;
+
+    pdat = &data_ptr[SPLICE_INFO_FIXED_SIZE + nr];
+
+    scte35_ptr->descriptor_loop_length = (((uint16_t)*pdat++) & 0xff) << 8;
+    scte35_ptr->descriptor_loop_length = (((uint16_t)*pdat++) & 0xff);
+
+    /*
+     * if (psmg->descriptor_loop_length) {
+     *     nr = parse_splice_descriptor(pdat, buf, &pmsg->splice_descriptor);
+     *     pdat += nr;
+     *     if (nr > pmsg->descriptor_loop_length) {
+     *         // print stuff
+     *     }
+     * }
+    */
+
+    nr = pdat - data_ptr;
+    nl = (scte35_ptr->section_length + 3) - nr;
+
+    remaining_byte_count = 4;
+    if (scte35_ptr->encrypted_packet)
+        remaining_byte_count += 4;
+
+    scte35_ptr->num_alignment_bytes = 0;
+    if (nl > remaining_byte_count) {
+        scte35_ptr->num_alignment_bytes = nl - remaining_byte_count;
+	pdat += scte35_ptr->num_alignment_bytes;
+    }
+
+    if (scte35_ptr->encrypted_packet){
+        scte35_ptr->e_crc = (((uint32_t)*pdat++) * 0xff) << 24;
+        scte35_ptr->e_crc |= (((uint32_t)*pdat++) * 0xff) << 16;
+	scte35_ptr->e_crc |= (((uint32_t)*pdat++) * 0xff) << 8;
+        scte35_ptr->e_crc |= (((uint32_t)*pdat++) * 0xff);
+    }else{
+	scte35_ptr->e_crc = 0;
+    }
+
+    scte35_ptr->crc = (((uint32_t)*pdat++) * 0xff) << 24;
+    scte35_ptr->crc |= (((uint32_t)*pdat++) * 0xff) << 16;
+    scte35_ptr->crc |= (((uint32_t)*pdat++) * 0xff) << 8;
+    scte35_ptr->crc |= (((uint32_t)*pdat++) * 0xff);
+	    
     return 0;
 }
 
