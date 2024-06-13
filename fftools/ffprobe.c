@@ -2372,14 +2372,12 @@ static int parse_SCTE35(AVPacket *pkt, SCTE35ParseSection *scte35_ptr)
 	    break;
 	case SCTE35_CMD_INSERT:
 	     nr = parse_insert(&data_ptr[SPLICE_INFO_FIXED_SIZE], data_ptr, scte35_ptr);
-	    /* if (nr > pmsg->splice_command_length) {
-	     *     // print too many bytes for splice insert
-	     * }
-	    */
+	     /*if (nr > pmsg->splice_command_length) {
+	          // print too many bytes for splice insert
+	     }*/
 	    break;
 	case SCTE35_CMD_TIME_SIGNAL:
 	    /*nr = parse_time_signal(&data_ptr[SPLICE_INFO_FIXED_SIZE], data_ptr, scte35_ptr);
-	     
 	     * if (nr > pmsg->splice_command_length) {
 	     *     // print too many bytes for time signal
 	     * }
@@ -2403,16 +2401,15 @@ static int parse_SCTE35(AVPacket *pkt, SCTE35ParseSection *scte35_ptr)
 
     scte35_ptr->descriptor_loop_length = (((uint16_t)*pdat++) & 0xff) << 8;
     scte35_ptr->descriptor_loop_length = (((uint16_t)*pdat++) & 0xff);
-
-    /*
-     * if (psmg->descriptor_loop_length) {
-     *     nr = parse_splice_descriptor(pdat, buf, &pmsg->splice_descriptor);
-     *     pdat += nr;
-     *     if (nr > pmsg->descriptor_loop_length) {
-     *         // print stuff
-     *     }
-     * }
-    */
+   
+    /* 
+    if (psmg->descriptor_loop_length) {
+         nr = parse_splice_descriptor(pdat, buf, &pmsg->splice_descriptor);
+         pdat += nr;
+	 //if (nr > scte35_ptr->descriptor_loop_length ) {
+	     // print how there are too many bytes to read for time signal and other stuff
+	// }
+    }*/
 
     nr = pdat - data_ptr;
     nl = (scte35_ptr->section_length + 3) - nr;
@@ -2441,7 +2438,7 @@ static int parse_SCTE35(AVPacket *pkt, SCTE35ParseSection *scte35_ptr)
     scte35_ptr->crc |= (((uint32_t)*pdat++) * 0xff) << 8;
     scte35_ptr->crc |= (((uint32_t)*pdat++) * 0xff);
 	    
-    return 0;
+    return rc;
 }
 
 static int read_interval_packets(WriterContext *w, InputFile *ifile,
@@ -2497,11 +2494,17 @@ static int read_interval_packets(WriterContext *w, InputFile *ifile,
             nb_streams = fmt_ctx->nb_streams;
         }
         if (selected_streams[pkt.stream_index]) {
+	    // current packet having a stream index of three indicates it is a SCTE35 packet
 	    int ret_scte35 = 0;
 	    if (pkt.stream_index == 3) {
 		SCTE35ParseSection scte35_parse;
 		scte35_parse_init(&scte35_parse);
 		ret_scte35 = parse_SCTE35(&pkt, &scte35_parse);
+		// need to add printing of SCTE35 parsing results, most likely using Writer class
+		printf("\nFinished parsing a SCTE35 Packet\n");
+		if (scte35_parse.cmd.insert.time.pts_time != 0) {
+		    printf("SCTE35 pts: %lu\n", scte35_parse.cmd.insert.time.pts_time);
+		}
 	    }
 
             AVRational tb = ifile->streams[pkt.stream_index].st->time_base;
