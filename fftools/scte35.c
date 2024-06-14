@@ -118,11 +118,11 @@ int parse_insert(unsigned char *cmd, unsigned char *table,
 		        SCTE35ParseSection *scte35_ptr)
 {
 
-    int i;
+    //int i;
     int nr;
     unsigned char *pdat = cmd;
     unsigned short unique_program_id;
-    SCTE35SpliceComponent splice_component;
+    //SCTE35SpliceComponent splice_component;
     SCTE35SpliceInsert *pcmd = &(scte35_ptr->cmd.insert);
     scte35_insert_init(pcmd);
     pcmd->splice_event_id = ((((uint32_t)*(pdat)) & 0xff) << 24) + 
@@ -173,4 +173,136 @@ int parse_insert(unsigned char *cmd, unsigned char *table,
     pcmd->avails_expected = *pdat++;
 
     return pdat - cmd;
+}
+
+static int parse_splice_avail(unsigned char *field, unsigned char *table, 
+		              SCTE35AvailDescriptor *ad)
+{
+    unsigned char *pdat = field;
+    memset(ad, 0, sizeof(*ad));
+    ad->provider_avail_id = ((((uint64_t)*pdat) & 0xff) << 24) + 
+	                    ((((uint64_t)*(pdat + 1)) & 0xff) << 16) +
+			    ((((uint64_t)*(pdat + 2)) & 0xff) << 8) +
+			    (((uint64_t)*(pdat + 3)) & 0xff);
+    pdat += 4;
+    
+    return pdat - field;
+}
+
+static int parse_splice_segmentation(unsigned char *field, unsigned char *table, 
+		              SCTE35SegDescriptor *sd)
+{
+    int i;
+    int nr;
+    unsigned char *pdat = field;
+    memset(sd, 0, sizeof(*sd));
+    sd->segmentation_event_id = ((((uint64_t)*pdat) & 0xff) << 24) + 
+	                        ((((uint64_t)*(pdat + 1)) & 0xff) << 16) +
+				((((uint64_t)*(pdat + 2)) & 0xff) << 8) + 
+				(((uint64_t)*(pdat + 3)) & 0xff);
+    pdat += 4;
+    sd->segmentation_event_cancel_indicator = (*pdat >> 7) & 1;
+    sd->reserved_1 = (*pdat++) & 0x7f;
+
+    if (sd->segmentation_event_cancel_indicator == 0) {
+        sd->program_segmentation_flag = (*pdat >> 7) & 1;
+	sd->segmentation_duration_flag = (*pdat >> 6) & 1;
+	sd->delivery_not_restricted_flag = (*pdat >> 5) & 1;
+	if (sd->delivery_not_restricted_flag == 0) {
+            sd->web_delivery_allowed_flag = (*pdat >> 4) & 1;
+	    sd->no_regional_blackout_flag = (*pdat >> 3) & 1;
+	    sd->archive_allowed_flag = (*pdat >> 2) & 1;
+	    sd->device_restrictions = *pdat & 0x3;
+	} else {
+            sd->reserved_2 = *pdat & 0x1f;
+	}
+	pdat++;
+
+	if (sd->program_segmentation_flag == 0){
+	    SCTE35SpliceComponent splice_component;
+	    sd->component_count = *pdat++;
+	    for (i = 0; i < sd->component_count; i++){
+	        nr = parse_component(pdat, table, &splice_component);
+		pdat += nr;
+		if (i < MAX_SCTE35_SPLICE_COMPONENTS)
+		    sd->component_info[i] = splice_component;
+	        // otherwise, print too many splice components
+	    }
+	}
+
+        if (sd->segmentation_duration_flag == 1) {
+	    sd->segmentation_duration = ((((uint64_t)*pdat) & 0x01) << 32) +
+		                        ((((uint64_t)*(pdat + 1)) & 0xff) << 24) + 
+                                        ((((uint64_t)*(pdat + 2)) & 0xff) << 16) + 
+					((((uint64_t)*(pdat + 3)) & 0xff) << 8) + 
+					(((uint64_t)*(pdat + 4)) & 0xff);
+	    pdat += 5;
+	}
+        
+	sd->segmentation_upid_type = *pdat++;
+	sd->segmentation_upid_length = *pdat++;
+	
+	for (i = 0; i < sd->segmentation_upid_length; i++){
+	    sd->segmentation_upid[i] = *pdat++;
+	}
+	if (sd->segmentation_upid_length < SPLICE_DESCRIPTOR_DATA_MAX_SIZE) {
+	    sd->segmentation_upid[i] = '\0';
+	} // otherwise, print unable to null terminate segmentation_upid
+
+        sd->segmentation_type_id = *pdat++;
+	sd->segment_num = *pdat++;
+	sd->segments_expected = *pdat++;
+	if (sd->segmentation_type_id == 0x34 || sd->segmentation_type_id == 0x36) {
+	    sd->sub_segment_num = *pdat++;
+	    sd->sub_segments_expected = *pdat++;
+	}
+    }
+    
+    nr = pdat - field;
+    return nr;
+}
+
+int parse_splice_descriptor(unsigned char *field, unsigned char *table,
+		            SCTE35SpliceDesc *splice_desc)
+{
+    int i;
+    int nd = 0;
+    int nr = 0;
+    int tag;
+    unsigned char *pdat = field;
+
+    splice_desc->splice_descriptor_tag = *pdat++;
+    splice_desc->descriptor_length = *pdat++;
+    splice_desc->identifier = ((((uint32_t)*pdat) & 0xff) << 24) + 
+	                      ((((uint32_t)*(pdat + 1)) & 0xff) << 16) +
+			      ((((uint32_t)*(pdat + 2)) & 0xff) << 8) + 
+			      (((uint32_t)*(pdat + 3)) & 0xff);
+    pdat += 4;
+    nd = splice_desc->descriptor_length - 4;
+    tag = splice_desc->splice_descriptor_tag;
+
+    switch (tag) {
+	case SCTE35_SPLICE_DESCRIPTOR_AVAIL:
+	    nr = parse_splice_avail(pdat, table, &splice_desc->payload.avail_desc);
+	    pdat += nr;
+	    break;
+	case SCTE35_SPLICE_DESCRIPTOR_DTMF:
+	case SCTE35_SPLICE_DESCRIPTOR_TIME:
+	    for(i = 0; i < nd; i++){
+	        splice_desc->payload.data[i] = *pdat++;
+	    }   
+	    break;
+	case SCTE35_SPLICE_DESCRIPTOR_SEGMENTATION:
+	    nr = parse_splice_segmentation(pdat, table, &splice_desc->payload.seg_desc);
+	    pdat += nr;
+	    break;
+        default:
+            for(i = 0; i < nd; i++){
+	        splice_desc->payload.data[i] = *pdat++;
+	    }
+	    break;
+    }
+
+    nr = pdat - field;
+    return nr;
 }

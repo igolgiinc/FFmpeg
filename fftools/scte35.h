@@ -6,6 +6,7 @@
 
 #define SPLICE_INFO_FIXED_SIZE 14
 #define MAX_SCTE35_SPLICE_COMPONENTS 10
+#define SPLICE_DESCRIPTOR_DATA_MAX_SIZE 256
 
 // values for types of SCTE35 splice commands
 enum {
@@ -15,6 +16,13 @@ enum {
     SCTE35_CMD_TIME_SIGNAL = 6,
     SCTE35_CMD_BW_RESERVATION = 7,
     SCTE35_CMD_PRIVATE_CMD = 0xff
+};
+
+enum {
+    SCTE35_SPLICE_DESCRIPTOR_AVAIL = 0,
+    SCTE35_SPLICE_DESCRIPTOR_DTMF = 1,
+    SCTE35_SPLICE_DESCRIPTOR_SEGMENTATION = 2,
+    SCTE35_SPLICE_DESCRIPTOR_TIME = 3
 };
 
 // specifies duration of commerical break
@@ -57,16 +65,68 @@ typedef struct SCTE35SpliceInsert {
     int avails_expected;
 } SCTE35SpliceInsert;
 
+typedef struct SCTE35Time {
+    SCTE35SpliceTime time;
+} SCTE35Time;
+
 typedef struct SCTE35SpliceSchedule {
     int dummy;
 } SCTE35SpliceSchedule;
 
-typedef struct SCTE35Time {
-    int dummy;
-} SCTE35Time;
+typedef struct SCTE35AvailDescriptor {
+    uint32_t provider_avail_id; 
+} SCTE35AvailDescriptor;
+
+typedef struct SCTE35DTMFDescriptor {
+    uint8_t preroll;
+    uint8_t dtmf_count;
+    uint8_t reserved;
+    uint8_t dtmf_char[256];
+} SCTE35DTMFDescriptor;
+
+typedef struct SCTE35SegDescriptor {
+    uint32_t segmentation_event_id;
+    int segmentation_event_cancel_indicator;
+    int reserved_1;
+    int program_segmentation_flag;
+    int segmentation_duration_flag;
+    int delivery_not_restricted_flag;
+    int web_delivery_allowed_flag;
+    int no_regional_blackout_flag;
+    int archive_allowed_flag;
+    int device_restrictions;
+    int reserved_2;
+    int component_count;
+    SCTE35SpliceComponent component_info[MAX_SCTE35_SPLICE_COMPONENTS];
+    uint64_t segmentation_duration;
+    uint8_t segmentation_upid_type;
+    uint8_t segmentation_upid_length;
+    uint8_t segmentation_upid[SPLICE_DESCRIPTOR_DATA_MAX_SIZE];
+    uint8_t segmentation_type_id;
+    uint8_t segment_num;
+    uint8_t segments_expected;
+    uint8_t sub_segment_num;
+    uint8_t sub_segments_expected;
+} SCTE35SegDescriptor;
+
+typedef struct SCTE35TimeDescriptor{
+    uint64_t TAI_seconds;
+    uint64_t TAI_ns;
+    uint16_t UTC_offset;    
+} SCTE35TimeDescriptor;
 
 typedef struct SCTE35SpliceDesc {
-    int dummy;
+    uint8_t splice_descriptor_tag;
+    uint8_t descriptor_length;
+    uint32_t identifier;
+    
+    union payload {
+        SCTE35AvailDescriptor avail_desc;
+	SCTE35DTMFDescriptor dtmp_desc;
+	SCTE35SegDescriptor seg_desc;
+	SCTE35TimeDescriptor time_desc;
+	uint8_t data[SPLICE_DESCRIPTOR_DATA_MAX_SIZE];
+    } payload;
 } SCTE35SpliceDesc;
 
 // overall struct to hold parsed contents of SCTE35 packet
@@ -92,7 +152,7 @@ typedef struct SCTE35ParseSection {
     } cmd;
 
     int descriptor_loop_length;
-    //SCTE35SpliceDesc splice_descriptor;
+    SCTE35SpliceDesc splice_descriptor;
     int num_alignment_bytes;
     uint32_t e_crc;
     uint32_t crc;
@@ -100,6 +160,5 @@ typedef struct SCTE35ParseSection {
 
 void scte35_parse_init(SCTE35ParseSection *scte35_ptr);
 int parse_insert(unsigned char *cmd, unsigned char *table, SCTE35ParseSection *scte35_ptr);
-/*int parse_splice_descriptor(unsigned char *field, unsigned char *table, SCTE35SpliceDescriptor *splice_descriptor);*/
-
+int parse_splice_descriptor(unsigned char *field, unsigned char *table, SCTE35SpliceDesc *splice_desc);
 #endif

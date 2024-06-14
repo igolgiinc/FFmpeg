@@ -2286,7 +2286,7 @@ static av_always_inline int process_frame(WriterContext *w,
         }
     } else {
 	if (par->codec_type == AVMEDIA_TYPE_DATA) {
-      	    printf("\nSCTE-35 detected in process_frame\n");
+      	    printf("SCTE-35 detected in process_frame\n");
 	}
         *packet_new = 0;
     }
@@ -2371,7 +2371,7 @@ static int parse_SCTE35(AVPacket *pkt, SCTE35ParseSection *scte35_ptr)
 	    // rc = SCTE35_MP_ERR_UNSUPPORTED_CMD; 
 	    break;
 	case SCTE35_CMD_INSERT:
-	     nr = parse_insert(&data_ptr[SPLICE_INFO_FIXED_SIZE], data_ptr, scte35_ptr);
+	    nr = parse_insert(&data_ptr[SPLICE_INFO_FIXED_SIZE], data_ptr, scte35_ptr);
 	     /*if (nr > pmsg->splice_command_length) {
 	          // print too many bytes for splice insert
 	     }*/
@@ -2402,14 +2402,13 @@ static int parse_SCTE35(AVPacket *pkt, SCTE35ParseSection *scte35_ptr)
     scte35_ptr->descriptor_loop_length = (((uint16_t)*pdat++) & 0xff) << 8;
     scte35_ptr->descriptor_loop_length = (((uint16_t)*pdat++) & 0xff);
    
-    /* 
-    if (psmg->descriptor_loop_length) {
-         nr = parse_splice_descriptor(pdat, buf, &pmsg->splice_descriptor);
+    if (scte35_ptr->descriptor_loop_length) {
+         nr = parse_splice_descriptor(pdat, data_ptr, &scte35_ptr->splice_descriptor);
          pdat += nr;
 	 //if (nr > scte35_ptr->descriptor_loop_length ) {
 	     // print how there are too many bytes to read for time signal and other stuff
 	// }
-    }*/
+    }
 
     nr = pdat - data_ptr;
     nl = (scte35_ptr->section_length + 3) - nr;
@@ -2425,18 +2424,18 @@ static int parse_SCTE35(AVPacket *pkt, SCTE35ParseSection *scte35_ptr)
     }
 
     if (scte35_ptr->encrypted_packet){
-        scte35_ptr->e_crc = (((uint32_t)*pdat++) * 0xff) << 24;
-        scte35_ptr->e_crc |= (((uint32_t)*pdat++) * 0xff) << 16;
-	scte35_ptr->e_crc |= (((uint32_t)*pdat++) * 0xff) << 8;
-        scte35_ptr->e_crc |= (((uint32_t)*pdat++) * 0xff);
+        scte35_ptr->e_crc = (((uint32_t)*pdat++) & 0xff) << 24;
+        scte35_ptr->e_crc |= (((uint32_t)*pdat++) & 0xff) << 16;
+	scte35_ptr->e_crc |= (((uint32_t)*pdat++) & 0xff) << 8;
+        scte35_ptr->e_crc |= (((uint32_t)*pdat++) & 0xff);
     }else{
 	scte35_ptr->e_crc = 0;
     }
 
-    scte35_ptr->crc = (((uint32_t)*pdat++) * 0xff) << 24;
-    scte35_ptr->crc |= (((uint32_t)*pdat++) * 0xff) << 16;
-    scte35_ptr->crc |= (((uint32_t)*pdat++) * 0xff) << 8;
-    scte35_ptr->crc |= (((uint32_t)*pdat++) * 0xff);
+    scte35_ptr->crc = (((uint32_t)*pdat++) & 0xff) << 24;
+    scte35_ptr->crc |= (((uint32_t)*pdat++) & 0xff) << 16;
+    scte35_ptr->crc |= (((uint32_t)*pdat++) & 0xff) << 8;
+    scte35_ptr->crc |= (((uint32_t)*pdat++) & 0xff);
 	    
     return rc;
 }
@@ -2502,7 +2501,7 @@ static int read_interval_packets(WriterContext *w, InputFile *ifile,
 		ret_scte35 = parse_SCTE35(&pkt, &scte35_parse);
 		// need to add printing of SCTE35 parsing results, most likely using Writer class
 		printf("\nFinished parsing a SCTE35 Packet\n");
-		if (scte35_parse.cmd.insert.time.pts_time != 0) {
+		if (ret_scte35 == 0 && scte35_parse.cmd.insert.time.pts_time != 0) {
 		    printf("SCTE35 pts: %lu\n", scte35_parse.cmd.insert.time.pts_time);
 		}
 	    }
