@@ -2044,7 +2044,7 @@ static void show_packet(WriterContext *w, InputFile *ifile, AVPacket *pkt, int p
     s = av_get_media_type_string(st->codecpar->codec_type);
     if (s) print_str    ("codec_type", s);
     else   print_str_opt("codec_type", "unknown");
-    print_int("stream_index",     pkt->stream_index);
+    print_int("stream index",     pkt->stream_index);
     print_ts  ("pts",             pkt->pts);
     print_time("pts_time",        pkt->pts, &st->time_base);
     print_ts  ("dts",             pkt->dts);
@@ -2285,9 +2285,10 @@ static av_always_inline int process_frame(WriterContext *w,
             *packet_new = 0;
         }
     } else {
+	/*
 	if (par->codec_type == AVMEDIA_TYPE_DATA) {
       	    printf("SCTE-35 detected in process_frame\n");
-	}
+	}*/
         *packet_new = 0;
     }
 
@@ -2343,7 +2344,7 @@ static int parse_SCTE35(AVPacket *pkt, SCTE35ParseSection *scte35_ptr)
     unsigned char *data_ptr = pkt->data;
     scte35_ptr->table_id = (int)data_ptr[0];
     if (scte35_ptr->table_id != 0xfc)
-        return -1;
+        return SCTE35_MP_ERR_TABLE_ID;
 
     scte35_ptr->section_syntax_indicator = ((int)data_ptr[1] >> 7) & 1;
     scte35_ptr->private_indicator = ((int)data_ptr[1] >> 6) & 1;
@@ -2368,7 +2369,7 @@ static int parse_SCTE35(AVPacket *pkt, SCTE35ParseSection *scte35_ptr)
 	    rc = 0;
 	    break;
 	case SCTE35_CMD_SCHEDULE:
-	    // rc = SCTE35_MP_ERR_UNSUPPORTED_CMD; 
+	    rc = SCTE35_MP_ERR_UNSUPPORTED_CMD; 
 	    break;
 	case SCTE35_CMD_INSERT:
 	    nr = parse_insert(&data_ptr[SPLICE_INFO_FIXED_SIZE], data_ptr, scte35_ptr);
@@ -2377,20 +2378,20 @@ static int parse_SCTE35(AVPacket *pkt, SCTE35ParseSection *scte35_ptr)
 	     }*/
 	    break;
 	case SCTE35_CMD_TIME_SIGNAL:
-	    /*nr = parse_time_signal(&data_ptr[SPLICE_INFO_FIXED_SIZE], data_ptr, scte35_ptr);
-	     * if (nr > pmsg->splice_command_length) {
+	    nr = parse_time_signal(&data_ptr[SPLICE_INFO_FIXED_SIZE], data_ptr, scte35_ptr);
+	    /* if (nr > pmsg->splice_command_length) {
 	     *     // print too many bytes for time signal
 	     * }
 	    */
 	    break;
 	case SCTE35_CMD_BW_RESERVATION:
-	    //rc = SCTE35_MP_ERR_UNSUPPORTED_CMD;
+	    rc = SCTE35_MP_ERR_UNSUPPORTED_CMD;
 	    break;
 	case SCTE35_CMD_PRIVATE_CMD:
-	    //rc = SCTE35_MP_ERR_UNSUPPORTED_CMD;
+	    rc = SCTE35_MP_ERR_UNSUPPORTED_CMD;
 	    break;
 	default:	
-	    //rc = SCTE35_MP_ERR_UNSUPPORTED_CMD;
+	    rc = SCTE35_MP_ERR_UNSUPPORTED_CMD;
 	    break;
     }
 
@@ -2493,17 +2494,36 @@ static int read_interval_packets(WriterContext *w, InputFile *ifile,
             nb_streams = fmt_ctx->nb_streams;
         }
         if (selected_streams[pkt.stream_index]) {
+            AVCodecParameters *par = ifile->streams[pkt.stream_index].st->codecpar;
 	    // current packet having a stream index of three indicates it is a SCTE35 packet
-	    int ret_scte35 = 0;
-	    if (pkt.stream_index == 3) {
+	    if (par->codec_id == AV_CODEC_ID_SCTE_35) {
+		int ret_scte35 = 0;
 		SCTE35ParseSection scte35_parse;
 		scte35_parse_init(&scte35_parse);
 		ret_scte35 = parse_SCTE35(&pkt, &scte35_parse);
 		// need to add printing of SCTE35 parsing results, most likely using Writer class
-		printf("\nFinished parsing a SCTE35 Packet\n");
-		if (ret_scte35 == 0 && scte35_parse.cmd.insert.time.pts_time != 0) {
-		    printf("SCTE35 pts: %lu\n", scte35_parse.cmd.insert.time.pts_time);
+		if (ret_scte35 == 0) {
+		    /*
+		    printf("SCTE35 table id: %d\n", scte35_parse.table_id);
+		    printf("SCTE35 section syntax indicator: %d\n", scte35_parse.section_syntax_indicator);
+		    printf("SCTE35 private indicator: %d\n", scte35_parse.private_indicator);
+		    printf("SCTE35 reserved: %d\n", scte35_parse.reserved);
+		    printf("SCTE35 section length: %d\n", scte35_parse.section_length);
+		    printf("SCTE35 protocol version: %d\n", scte35_parse.protocol_version);
+		    printf("SCTE35 pts adjustment: %lu\n", scte35_parse.pts_adjustment);
+		    printf("SCTE35 cw index: %d\n", scte35_parse.cw_index);
+		    printf("SCTE35 tier: %d\n", scte35_parse.tier);
+		    printf("SCTE35 splice command length: %d\n", scte35_parse.splice_command_length);
+		    printf("SCTE35 splice command type: %d\n", scte35_parse.splice_command_type);*/
+		    AVBPrint pbuf;
+		    av_bprint_init(&pbuf, 1, AV_BPRINT_SIZE_UNLIMITED);
+		    writer_print_section_header(w, SECTION_ID_FRAME);
+		    print_int("table_id", scte35_parse.table_id);		    
+		    writer_print_section_footer(w);
+		    av_bprint_finalize(&pbuf, NULL);
+		    fflush(stdout);
 		}
+
 	    }
 
             AVRational tb = ifile->streams[pkt.stream_index].st->time_base;

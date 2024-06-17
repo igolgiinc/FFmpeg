@@ -118,11 +118,11 @@ int parse_insert(unsigned char *cmd, unsigned char *table,
 		        SCTE35ParseSection *scte35_ptr)
 {
 
-    //int i;
+    int i;
     int nr;
     unsigned char *pdat = cmd;
     unsigned short unique_program_id;
-    //SCTE35SpliceComponent splice_component;
+    SCTE35SpliceComponent splice_component;
     SCTE35SpliceInsert *pcmd = &(scte35_ptr->cmd.insert);
     scte35_insert_init(pcmd);
     pcmd->splice_event_id = ((((uint32_t)*(pdat)) & 0xff) << 24) + 
@@ -148,7 +148,7 @@ int parse_insert(unsigned char *cmd, unsigned char *table,
 	    pdat += nr;
 	}
 
-	/*if (pcmd->program_splice_flag == 0) 
+	if (pcmd->program_splice_flag == 0) 
         {
             pcmd->component_count = *pdat++;
 	    for (i = 0; i < pcmd->component_count; i++) {
@@ -157,7 +157,7 @@ int parse_insert(unsigned char *cmd, unsigned char *table,
 		if (i < MAX_SCTE35_SPLICE_COMPONENTS)
 		    pcmd->component_info[i] = splice_component;
 	    }	    
-	}*/
+	}
 
         if (pcmd->duration_flag) {
 	    nr = parse_break_duration(pdat, table, &pcmd->break_duration);
@@ -259,6 +259,20 @@ static int parse_splice_segmentation(unsigned char *field, unsigned char *table,
     }
     
     nr = pdat - field;
+    return nr;
+}
+
+int parse_time_signal(unsigned char *cmd, unsigned char *table, 
+		      SCTE35ParseSection *scte35_ptr)
+{
+    int nr;
+    unsigned char *pdat = cmd;
+    SCTE35Time *pcmd = &(scte35_ptr->cmd.time_signal);
+    nr = parse_splice_time(pdat, table, &pcmd->time);
+    
+    pdat += nr;
+    nr = pdat - cmd;
+
     return nr;
 }
 

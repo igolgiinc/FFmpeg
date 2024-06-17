@@ -8,7 +8,13 @@
 #define MAX_SCTE35_SPLICE_COMPONENTS 10
 #define SPLICE_DESCRIPTOR_DATA_MAX_SIZE 256
 
-// values for types of SCTE35 splice commands
+// values for types of errors in scte35.c
+enum {
+    SCTE35_MP_ERR_UNSUPPORTED_CMD = -1,
+    SCTE35_MP_ERR_TABLE_ID = -2
+};
+
+// values for specific  SCTE35 splice commands
 enum {
     SCTE35_CMD_NULL = 0,
     SCTE35_CMD_SCHEDULE = 4,
@@ -18,6 +24,7 @@ enum {
     SCTE35_CMD_PRIVATE_CMD = 0xff
 };
 
+// values for specific SCTE35 splice descriptors
 enum {
     SCTE35_SPLICE_DESCRIPTOR_AVAIL = 0,
     SCTE35_SPLICE_DESCRIPTOR_DTMF = 1,
@@ -25,7 +32,6 @@ enum {
     SCTE35_SPLICE_DESCRIPTOR_TIME = 3
 };
 
-// specifies duration of commerical break
 // if auto_return is one, then splicing device uses duration to determine when to return to network feed from a break
 // if auto_return is zero, a splice_insert will end a break
 typedef struct SCTE35BreakDuration {
@@ -34,7 +40,6 @@ typedef struct SCTE35BreakDuration {
     uint64_t duration; // in terms of program's ninety kHz clock
 } SCTE35BreakDuration;
 
-// specifies time of splice event
 typedef struct SCTE35SpliceTime {
     int time_specified_flag; // if one, indicates pts_time is set
     int reserved;
@@ -47,6 +52,7 @@ typedef struct SCTE35SpliceComponent {
     SCTE35SpliceTime time;
 } SCTE35SpliceComponent;
 
+// sent at least once per splice event
 typedef struct SCTE35SpliceInsert {
     int splice_event_id;
     int splice_event_cancel_indicator; // if set to one, means previous sent splice event was canceled
@@ -54,24 +60,26 @@ typedef struct SCTE35SpliceInsert {
     int out_of_network_indicator; // if one, means exiting network feed. otherwise, means returning
     int program_splice_flag; // indicates whether in program splice or component splice mode
     int duration_flag; // if one, break_duration field exists
-    int splice_immediate_flag;
+    int splice_immediate_flag; // if one, indicates no SCTE35SpliceTime field
     int reserved_2;
     SCTE35SpliceTime time;
-    int component_count;
-    //SCTE35SpliceComponent component_info[MAX_SCTE35_SPLICE_COMPONENTS];
+    int component_count; // number of elementary PID streams
+    SCTE35SpliceComponent component_info[MAX_SCTE35_SPLICE_COMPONENTS];
     SCTE35BreakDuration break_duration;
     int unique_program_id;
     int avail_num;
     int avails_expected;
 } SCTE35SpliceInsert;
 
+// used to signal splice events
 typedef struct SCTE35Time {
     SCTE35SpliceTime time;
 } SCTE35Time;
 
+/*
 typedef struct SCTE35SpliceSchedule {
     int dummy;
-} SCTE35SpliceSchedule;
+} SCTE35SpliceSchedule;*/
 
 typedef struct SCTE35AvailDescriptor {
     uint32_t provider_avail_id; 
@@ -147,7 +155,7 @@ typedef struct SCTE35ParseSection {
 
     union cmd {
         SCTE35SpliceInsert insert;
-        SCTE35SpliceSchedule schedule;
+        //SCTE35SpliceSchedule schedule;
         SCTE35Time time_signal; 
     } cmd;
 
@@ -161,4 +169,6 @@ typedef struct SCTE35ParseSection {
 void scte35_parse_init(SCTE35ParseSection *scte35_ptr);
 int parse_insert(unsigned char *cmd, unsigned char *table, SCTE35ParseSection *scte35_ptr);
 int parse_splice_descriptor(unsigned char *field, unsigned char *table, SCTE35SpliceDesc *splice_desc);
+int parse_time_signal(unsigned char *cmd, unsigned char *table, SCTE35ParseSection *scte35_ptr);
+
 #endif
