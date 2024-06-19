@@ -165,6 +165,7 @@ typedef enum {
     SECTION_ID_FORMAT_TAGS,
     SECTION_ID_FRAME,
     SECTION_ID_FRAMES,
+    SECTION_ID_SCTE35,
     SECTION_ID_FRAME_TAGS,
     SECTION_ID_FRAME_SIDE_DATA_LIST,
     SECTION_ID_FRAME_SIDE_DATA,
@@ -208,13 +209,14 @@ static struct section sections[] = {
     [SECTION_ID_ERROR] =              { SECTION_ID_ERROR, "error", 0, { -1 } },
     [SECTION_ID_FORMAT] =             { SECTION_ID_FORMAT, "format", 0, { SECTION_ID_FORMAT_TAGS, -1 } },
     [SECTION_ID_FORMAT_TAGS] =        { SECTION_ID_FORMAT_TAGS, "tags", SECTION_FLAG_HAS_VARIABLE_FIELDS, { -1 }, .element_name = "tag", .unique_name = "format_tags" },
-    [SECTION_ID_FRAMES] =             { SECTION_ID_FRAMES, "frames", SECTION_FLAG_IS_ARRAY, { SECTION_ID_FRAME, SECTION_ID_SUBTITLE, -1 } },
+    [SECTION_ID_FRAMES] =             { SECTION_ID_FRAMES, "frames", SECTION_FLAG_IS_ARRAY, { SECTION_ID_FRAME, SECTION_ID_SUBTITLE, SECTION_ID_SCTE35, -1 } },
     [SECTION_ID_FRAME] =              { SECTION_ID_FRAME, "frame", 0, { SECTION_ID_FRAME_TAGS, SECTION_ID_FRAME_SIDE_DATA_LIST, SECTION_ID_FRAME_LOGS, -1 } },
     [SECTION_ID_FRAME_TAGS] =         { SECTION_ID_FRAME_TAGS, "tags", SECTION_FLAG_HAS_VARIABLE_FIELDS, { -1 }, .element_name = "tag", .unique_name = "frame_tags" },
     [SECTION_ID_FRAME_SIDE_DATA_LIST] ={ SECTION_ID_FRAME_SIDE_DATA_LIST, "side_data_list", SECTION_FLAG_IS_ARRAY, { SECTION_ID_FRAME_SIDE_DATA, -1 }, .element_name = "side_data", .unique_name = "frame_side_data_list" },
     [SECTION_ID_FRAME_SIDE_DATA] =     { SECTION_ID_FRAME_SIDE_DATA, "side_data", 0, { -1 } },
     [SECTION_ID_FRAME_LOGS] =         { SECTION_ID_FRAME_LOGS, "logs", SECTION_FLAG_IS_ARRAY, { SECTION_ID_FRAME_LOG, -1 } },
     [SECTION_ID_FRAME_LOG] =          { SECTION_ID_FRAME_LOG, "log", 0, { -1 },  },
+    [SECTION_ID_SCTE35] =             { SECTION_ID_SCTE35, "SCTE35", 0, { -1 } },
     [SECTION_ID_LIBRARY_VERSIONS] =   { SECTION_ID_LIBRARY_VERSIONS, "library_versions", SECTION_FLAG_IS_ARRAY, { SECTION_ID_LIBRARY_VERSION, -1 } },
     [SECTION_ID_LIBRARY_VERSION] =    { SECTION_ID_LIBRARY_VERSION, "library_version", 0, { -1 } },
     [SECTION_ID_PACKETS] =            { SECTION_ID_PACKETS, "packets", SECTION_FLAG_IS_ARRAY, { SECTION_ID_PACKET, -1} },
@@ -2108,6 +2110,11 @@ static void show_subtitle(WriterContext *w, AVSubtitle *sub, AVStream *stream,
     fflush(stdout);
 }
 
+static void show_scte35_packet(WriterContext *w, SCTE35ParseSection *scte35_ptr)
+{
+    
+}
+
 static void show_frame(WriterContext *w, AVFrame *frame, AVStream *stream,
                        AVFormatContext *fmt_ctx)
 {
@@ -2134,6 +2141,7 @@ static void show_frame(WriterContext *w, AVFrame *frame, AVStream *stream,
     print_duration_ts  ("pkt_duration",      frame->pkt_duration);
     print_duration_time("pkt_duration_time", frame->pkt_duration, &stream->time_base);
     if (frame->pkt_pos != -1) print_fmt    ("pkt_pos", "%"PRId64, frame->pkt_pos);
+
     else                      print_str_opt("pkt_pos", "N/A");
     if (frame->pkt_size != -1) print_val    ("pkt_size", frame->pkt_size, unit_byte_str);
     else                       print_str_opt("pkt_size", "N/A");
@@ -2286,7 +2294,7 @@ static av_always_inline int process_frame(WriterContext *w,
         }
     } else {
 	/*
-	if (par->codec_type == AVMEDIA_TYPE_DATA) {
+	if (par->codec_id == AV_CODEC_ID_SCTE_35 && pkt->buf != 0x0) {
       	    printf("SCTE-35 detected in process_frame\n");
 	}*/
         *packet_new = 0;
@@ -2450,6 +2458,7 @@ static int read_interval_packets(WriterContext *w, InputFile *ifile,
     int ret = 0, i = 0, frame_count = 0;
     int64_t start = -INT64_MAX, end = interval->end;
     int has_start = 0, has_end = interval->has_end && !interval->end_is_offset;
+    int64_t last_pcr = -1;
 
     av_init_packet(&pkt);
 
@@ -2503,24 +2512,70 @@ static int read_interval_packets(WriterContext *w, InputFile *ifile,
 		ret_scte35 = parse_SCTE35(&pkt, &scte35_parse);
 		// need to add printing of SCTE35 parsing results, most likely using Writer class
 		if (ret_scte35 == 0) {
-		    /*
-		    printf("SCTE35 table id: %d\n", scte35_parse.table_id);
-		    printf("SCTE35 section syntax indicator: %d\n", scte35_parse.section_syntax_indicator);
-		    printf("SCTE35 private indicator: %d\n", scte35_parse.private_indicator);
-		    printf("SCTE35 reserved: %d\n", scte35_parse.reserved);
-		    printf("SCTE35 section length: %d\n", scte35_parse.section_length);
-		    printf("SCTE35 protocol version: %d\n", scte35_parse.protocol_version);
-		    printf("SCTE35 pts adjustment: %lu\n", scte35_parse.pts_adjustment);
-		    printf("SCTE35 cw index: %d\n", scte35_parse.cw_index);
-		    printf("SCTE35 tier: %d\n", scte35_parse.tier);
-		    printf("SCTE35 splice command length: %d\n", scte35_parse.splice_command_length);
-		    printf("SCTE35 splice command type: %d\n", scte35_parse.splice_command_type);*/
 		    AVBPrint pbuf;
 		    av_bprint_init(&pbuf, 1, AV_BPRINT_SIZE_UNLIMITED);
-		    writer_print_section_header(w, SECTION_ID_FRAME);
-		    print_int("table_id", scte35_parse.table_id);		    
-		    writer_print_section_footer(w);
-		    av_bprint_finalize(&pbuf, NULL);
+		    writer_print_section_header(w, SECTION_ID_SCTE35);
+		    		    
+		    char command_type_str[50];
+		    char in_out_str[50];
+		    uint64_t pts_time;
+		    int duration;
+		    switch(scte35_parse.splice_command_type){
+			case SCTE35_CMD_NULL:
+			    strcpy(command_type_str, "NULL");
+			    strcpy(in_out_str, "N/A");
+			    pts_time = -1;
+			    duration = -1;
+			    break;
+		        case SCTE35_CMD_SCHEDULE:
+			    strcpy(command_type_str, "SCHEDULE");
+			    strcpy(in_out_str, "N/A");
+			    pts_time = -1;
+			    duration = -1;
+		            break;
+			case SCTE35_CMD_INSERT:
+			    strcpy(command_type_str, "INSERT");
+			    if (scte35_parse.cmd.insert.break_duration.duration != 0 && scte35_parse.cmd.insert.break_duration.duration != -1) {
+                                duration = scte35_parse.cmd.insert.break_duration.duration;
+			        strcpy(in_out_str, "OUT");	
+			    } else {
+			        duration = -1;
+				strcpy(in_out_str, "IN");
+			    }
+			    pts_time = scte35_parse.cmd.insert.time.pts_time;
+			    break;
+			case SCTE35_CMD_TIME_SIGNAL:
+                            strcpy(command_type_str, "TIME SIGNAL");
+			    strcpy(in_out_str, "N/A");
+                            duration = -1;
+                            pts_time = scte35_parse.cmd.time_signal.time.pts_time;
+			    break;
+			case SCTE35_CMD_BW_RESERVATION:
+                            strcpy(command_type_str, "BANDWIDTH RESERVATION");
+			    strcpy(in_out_str, "N/A");
+			    pts_time = -1;
+			    duration = -1;
+			    break;
+			case SCTE35_CMD_PRIVATE_CMD:
+                            strcpy(command_type_str, "PRIVATE");
+			    strcpy(in_out_str, "N/A");
+			    pts_time = -1;
+			    duration = -1;
+			    break;
+			default:
+			    strcpy(command_type_str, "UNKNOWN");
+			    strcpy(in_out_str, "N/A");
+			    pts_time = -1;
+			    duration = -1;
+			    break;
+	            }
+                    print_str("SCTE35_cmd_type", command_type_str);
+		    print_int("SCTE35_pts_time", pts_time);
+		    print_str("SCTE35_in/out", in_out_str);
+		    print_int("SCTE35_duration", duration);
+                    printf("\n"); 
+                    writer_print_section_footer(w);
+                    av_bprint_finalize(&pbuf, NULL);
 		    fflush(stdout);
 		}
 
@@ -3698,7 +3753,6 @@ static inline int check_section_show_entries(int section_id)
 
 int main(int argc, char **argv)
 {
-    printf("Hello World\n");
     const Writer *w;
     WriterContext *wctx;
     char *buf;

@@ -3107,6 +3107,12 @@ static int mpegts_read_packet(AVFormatContext *s, AVPacket *pkt)
     pkt->size = -1;
     ts->pkt = pkt;
     ret = handle_packets(ts, 0);
+    
+    if (s->nb_programs > 0) {
+	int pcr_pid = (*(s->programs))->pcr_pid;
+        pkt->last_pcr = ts->pids[pcr_pid]->last_pcr;
+    } 
+
     if (ret < 0) {
         av_packet_unref(ts->pkt);
         /* flush pes data left */
