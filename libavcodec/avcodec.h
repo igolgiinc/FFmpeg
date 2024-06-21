@@ -1474,7 +1474,6 @@ typedef struct AVPacket {
      */
     int64_t dts;
     int64_t last_pcr;
-    int64_t last_pcr_pos;
     uint8_t *data;
     int   size;
     int   stream_index;

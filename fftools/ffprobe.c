@@ -2112,7 +2112,71 @@ static void show_subtitle(WriterContext *w, AVSubtitle *sub, AVStream *stream,
 
 static void show_scte35_packet(WriterContext *w, SCTE35ParseSection *scte35_ptr)
 {
-    
+    AVBPrint pbuf;
+    av_bprint_init(&pbuf, 1, AV_BPRINT_SIZE_UNLIMITED);
+    writer_print_section_header(w, SECTION_ID_SCTE35);
+		    		    
+    char command_type_str[50];
+    char in_out_str[50];
+    uint64_t pts_time;
+    int duration;
+    switch(scte35_ptr->splice_command_type){
+        case SCTE35_CMD_NULL:
+            strcpy(command_type_str, "NULL");
+	    strcpy(in_out_str, "N/A");
+	    pts_time = -1;
+	    duration = -1;
+	    break;
+        case SCTE35_CMD_SCHEDULE:
+	    strcpy(command_type_str, "SCHEDULE");
+	    strcpy(in_out_str, "N/A");
+	    pts_time = -1;
+            duration = -1;
+	    break;
+        case SCTE35_CMD_INSERT:
+	    strcpy(command_type_str, "INSERT");
+	    if (scte35_ptr->cmd.insert.out_of_network_indicator) {
+                duration = scte35_ptr->cmd.insert.break_duration.duration;
+	        strcpy(in_out_str, "OUT");	
+	    } else {
+		duration = -1;
+		strcpy(in_out_str, "IN");
+	    }
+            pts_time = scte35_ptr->cmd.insert.time.pts_time;
+	    break;
+	case SCTE35_CMD_TIME_SIGNAL:
+            strcpy(command_type_str, "TIME SIGNAL");
+	    strcpy(in_out_str, "N/A");
+            duration = -1;
+            pts_time = scte35_ptr->cmd.time_signal.time.pts_time;
+            break;
+	case SCTE35_CMD_BW_RESERVATION:
+            strcpy(command_type_str, "BANDWIDTH RESERVATION");
+	    strcpy(in_out_str, "N/A");
+	    pts_time = -1;
+	    duration = -1;
+	    break;
+	case SCTE35_CMD_PRIVATE_CMD:
+            strcpy(command_type_str, "PRIVATE");
+            strcpy(in_out_str, "N/A");
+            pts_time = -1;
+            duration = -1;
+	    break;
+	default:
+	    strcpy(command_type_str, "UNKNOWN");
+	    strcpy(in_out_str, "N/A");
+	    pts_time = -1;
+	    duration = -1;
+	    break;
+	}
+        print_str("SCTE35_cmd_type", command_type_str);
+        print_int("SCTE35_pts_time", pts_time);
+        print_str("SCTE35_in/out", in_out_str);
+	print_int("SCTE35_duration", duration); 
+        writer_print_section_footer(w);
+        av_bprint_finalize(&pbuf, NULL);
+        fflush(stdout);
+
 }
 
 static void show_frame(WriterContext *w, AVFrame *frame, AVStream *stream,
@@ -2371,6 +2435,7 @@ static int parse_SCTE35(AVPacket *pkt, SCTE35ParseSection *scte35_ptr)
     scte35_ptr->splice_command_length = (((uint32_t)data_ptr[11] & 0x0f) << 8) +
 	                                ((uint32_t)data_ptr[12] & 0xff);
     scte35_ptr->splice_command_type = (int)data_ptr[13];
+    scte35_ptr->last_pcr = pkt->last_pcr;
 
     switch (scte35_ptr->splice_command_type){
         case SCTE35_CMD_NULL:
@@ -2494,6 +2559,12 @@ static int read_interval_packets(WriterContext *w, InputFile *ifile,
         ret = AVERROR(ENOMEM);
         goto end;
     }
+
+    fmt_ctx->cur_packet_num = 0;
+    fmt_ctx->last_pcr_packet_num = 0;
+    SCTE35ParseSection scte35_parse;
+    int prev_pkt_scte35 = 0;
+
     while (!av_read_frame(fmt_ctx, &pkt)) {
 	packet_count++;
         if (fmt_ctx->nb_streams > nb_streams) {
@@ -2502,83 +2573,29 @@ static int read_interval_packets(WriterContext *w, InputFile *ifile,
             REALLOCZ_ARRAY_STREAM(selected_streams,   nb_streams, fmt_ctx->nb_streams);
             nb_streams = fmt_ctx->nb_streams;
         }
+
+        if (prev_pkt_scte35) {
+            if (scte35_parse.last_pcr_packet_num != fmt_ctx->last_pcr_packet_num && pkt.last_pcr != -1) {
+                scte35_parse.next_pcr_packet_num = fmt_ctx->last_pcr_packet_num;
+	        scte35_parse.next_pcr = pkt.last_pcr;
+		prev_pkt_scte35 = 0;
+	    }
+	}
+
         if (selected_streams[pkt.stream_index]) {
             AVCodecParameters *par = ifile->streams[pkt.stream_index].st->codecpar;
-	    // current packet having a stream index of three indicates it is a SCTE35 packet
 	    if (par->codec_id == AV_CODEC_ID_SCTE_35) {
 		int ret_scte35 = 0;
-		SCTE35ParseSection scte35_parse;
 		scte35_parse_init(&scte35_parse);
-		ret_scte35 = parse_SCTE35(&pkt, &scte35_parse);
-		// need to add printing of SCTE35 parsing results, most likely using Writer class
-		if (ret_scte35 == 0) {
-		    AVBPrint pbuf;
-		    av_bprint_init(&pbuf, 1, AV_BPRINT_SIZE_UNLIMITED);
-		    writer_print_section_header(w, SECTION_ID_SCTE35);
-		    		    
-		    char command_type_str[50];
-		    char in_out_str[50];
-		    uint64_t pts_time;
-		    int duration;
-		    switch(scte35_parse.splice_command_type){
-			case SCTE35_CMD_NULL:
-			    strcpy(command_type_str, "NULL");
-			    strcpy(in_out_str, "N/A");
-			    pts_time = -1;
-			    duration = -1;
-			    break;
-		        case SCTE35_CMD_SCHEDULE:
-			    strcpy(command_type_str, "SCHEDULE");
-			    strcpy(in_out_str, "N/A");
-			    pts_time = -1;
-			    duration = -1;
-		            break;
-			case SCTE35_CMD_INSERT:
-			    strcpy(command_type_str, "INSERT");
-			    if (scte35_parse.cmd.insert.break_duration.duration != 0 && scte35_parse.cmd.insert.break_duration.duration != -1) {
-                                duration = scte35_parse.cmd.insert.break_duration.duration;
-			        strcpy(in_out_str, "OUT");	
-			    } else {
-			        duration = -1;
-				strcpy(in_out_str, "IN");
-			    }
-			    pts_time = scte35_parse.cmd.insert.time.pts_time;
-			    break;
-			case SCTE35_CMD_TIME_SIGNAL:
-                            strcpy(command_type_str, "TIME SIGNAL");
-			    strcpy(in_out_str, "N/A");
-                            duration = -1;
-                            pts_time = scte35_parse.cmd.time_signal.time.pts_time;
-			    break;
-			case SCTE35_CMD_BW_RESERVATION:
-                            strcpy(command_type_str, "BANDWIDTH RESERVATION");
-			    strcpy(in_out_str, "N/A");
-			    pts_time = -1;
-			    duration = -1;
-			    break;
-			case SCTE35_CMD_PRIVATE_CMD:
-                            strcpy(command_type_str, "PRIVATE");
-			    strcpy(in_out_str, "N/A");
-			    pts_time = -1;
-			    duration = -1;
-			    break;
-			default:
-			    strcpy(command_type_str, "UNKNOWN");
-			    strcpy(in_out_str, "N/A");
-			    pts_time = -1;
-			    duration = -1;
-			    break;
-	            }
-                    print_str("SCTE35_cmd_type", command_type_str);
-		    print_int("SCTE35_pts_time", pts_time);
-		    print_str("SCTE35_in/out", in_out_str);
-		    print_int("SCTE35_duration", duration);
-                    printf("\n"); 
-                    writer_print_section_footer(w);
-                    av_bprint_finalize(&pbuf, NULL);
-		    fflush(stdout);
-		}
+		
+		scte35_parse.cur_packet_num = fmt_ctx->cur_packet_num;
+		scte35_parse.last_pcr_packet_num = fmt_ctx->last_pcr_packet_num;
 
+		ret_scte35 = parse_SCTE35(&pkt, &scte35_parse);
+		if (ret_scte35 != 0) 
+		    printf("\nIssue when parsing SCTE35\n");
+		else
+		    prev_pkt_scte35 = 1;
 	    }
 
             AVRational tb = ifile->streams[pkt.stream_index].st->time_base;

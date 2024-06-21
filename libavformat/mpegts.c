@@ -168,6 +168,9 @@ struct MpegTSContext {
     /** filters for various streams specified by PMT + for the PAT and PMT */
     MpegTSFilter *pids[NB_PID_MAX];
     int current_pid;
+
+    int64_t cur_packet_num;
+    int64_t last_pcr_packet_num;
 };
 
 #define MPEGTS_OPTIONS \
@@ -2638,8 +2641,11 @@ static int handle_packet(MpegTSContext *ts, const uint8_t *packet)
     if (has_adaptation) {
         int64_t pcr_h;
         int pcr_l;
-        if (parse_pcr(&pcr_h, &pcr_l, packet) == 0)
+        if (parse_pcr(&pcr_h, &pcr_l, packet) == 0) {
             tss->last_pcr = pcr_h * 300 + pcr_l;
+	    ts->pkt->last_pcr = tss->last_pcr;
+	    ts->last_pcr_packet_num = ts->cur_packet_num;
+	}
         /* skip adaptation field */
         p += p[0] + 1;
     }
@@ -2855,7 +2861,7 @@ static int handle_packets(MpegTSContext *ts, int64_t nb_packets)
         }
         if (ts->stop_parse > 0)
             break;
-
+ 	ts->cur_packet_num++;
         ret = read_packet(s, packet, ts->raw_packet_size, &data);
         if (ret != 0)
             break;
@@ -3104,14 +3110,13 @@ static int mpegts_read_packet(AVFormatContext *s, AVPacket *pkt)
     MpegTSContext *ts = s->priv_data;
     int ret, i;
 
+    ts->cur_packet_num = s->cur_packet_num;
+    ts->last_pcr_packet_num = s->last_pcr_packet_num;
     pkt->size = -1;
     ts->pkt = pkt;
     ret = handle_packets(ts, 0);
-    
-    if (s->nb_programs > 0) {
-	int pcr_pid = (*(s->programs))->pcr_pid;
-        pkt->last_pcr = ts->pids[pcr_pid]->last_pcr;
-    } 
+    s->cur_packet_num = ts->cur_packet_num;
+    s->last_pcr_packet_num = ts->last_pcr_packet_num; 
 
     if (ret < 0) {
         av_packet_unref(ts->pkt);

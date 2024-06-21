@@ -57,6 +57,12 @@ void scte35_parse_init(SCTE35ParseSection *scte35_ptr)
     scte35_ptr->num_alignment_bytes = -1;
     scte35_ptr->e_crc = 0;
     scte35_ptr->crc = 0;
+    scte35_ptr->cur_packet_num = 0;
+    scte35_ptr->last_pcr_packet_num = 0;
+    scte35_ptr->last_pcr = 0;
+    scte35_ptr->next_pcr_packet_num = 0;
+    scte35_ptr->next_pcr = 0;
+    scte35_ptr->cur_pcr = 0;
 }
 
 // parses packet to fill splice_time struct
