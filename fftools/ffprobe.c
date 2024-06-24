@@ -2572,8 +2572,8 @@ static int read_interval_packets(WriterContext *w, InputFile *ifile,
     // used for calculating SCTE35 packet pcr
     fmt_ctx->cur_packet_num = 0;
     fmt_ctx->last_pcr_packet_num = 0;
-    SCTE35ParseSection scte35_parse;
-    int prev_pkt_scte35 = 0; // tracks if prev packet was a SCTE35 packet
+    SCTE35ParseSection scte35_parse; // stores info on SCTE35 packet
+    int prev_pkt_scte35 = 0; // scte35 pkt flag, tracks if prev pkt was SCTE35
 
     while (!av_read_frame(fmt_ctx, &pkt)) {
 	packet_count++;
@@ -2584,17 +2584,17 @@ static int read_interval_packets(WriterContext *w, InputFile *ifile,
             nb_streams = fmt_ctx->nb_streams;
         }
 
-	// for printing contents of SCTE35 packet
-        if (prev_pkt_scte35) {
-	    // with current and previous pcr/packet num, go thru one more iteration to get next pcr/packet num
+	// section is for obtaining next pcr/packet_num to calculate SCTE35 pcr
+        if (prev_pkt_scte35 && do_read_frames) {
+	    // to get next pcr/packet_num, obtain from the next iteration after SCTE35 pkt
             if (scte35_parse.last_pcr_packet_num < fmt_ctx->last_pcr_packet_num) { // make sure between packets that there was a packet with a pcr timestamp
                 scte35_parse.next_pcr_packet_num = fmt_ctx->last_pcr_packet_num;
 	        scte35_parse.next_pcr = fmt_ctx->last_pcr;
 		prev_pkt_scte35 = 0; // reset scte35 pkt flag
 		// calculate scte35 pcr: (((next_pcr - last_pcr) / (next_pcr_pkt_num - last_pcr_pkt_num)) * (cur_pkt_num - last_pcr_pkt_num)) + last_pcr
 		// value is divided by three-hundred to convert from 27MHz to 90KHz
-		scte35_parse.cur_pcr = (int64_t)(((((long double)(scte35_parse.next_pcr - scte35_parse.last_pcr) / (scte35_parse.next_pcr_packet_num - scte35_parse.last_pcr_packet_num)) * (scte35_parse.cur_packet_num - scte35_parse.last_pcr_packet_num)) + (scte35_parse.last_pcr)) / 300);
-	        show_scte35_packet(w, &scte35_parse);
+		scte35_parse.cur_pcr = (int64_t)(((((long double)(scte35_parse.next_pcr - scte35_parse.last_pcr) / (scte35_parse.next_pcr_packet_num - scte35_parse.last_pcr_packet_num)) * (scte35_parse.cur_packet_num - scte35_parse.last_pcr_packet_num)) + (scte35_parse.last_pcr)) / 300.0);
+		show_scte35_packet(w, &scte35_parse); // print contents of SCTE35 packet
 	    }
 	}
 

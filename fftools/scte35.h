@@ -40,6 +40,7 @@ typedef struct SCTE35BreakDuration {
     uint64_t duration; // in terms of program's ninety kHz clock
 } SCTE35BreakDuration;
 
+// specifies time of splice event
 typedef struct SCTE35SpliceTime {
     int time_specified_flag; // if one, indicates pts_time is set
     int reserved;
@@ -81,10 +82,12 @@ typedef struct SCTE35SpliceSchedule {
     int dummy;
 } SCTE35SpliceSchedule;*/
 
+// extension for splice_insert, allows for auth id to be sent for an avail
 typedef struct SCTE35AvailDescriptor {
     uint32_t provider_avail_id; 
 } SCTE35AvailDescriptor;
 
+// extension for splice_insert, allows for reciever to generate DTMF seq
 typedef struct SCTE35DTMFDescriptor {
     uint8_t preroll;
     uint8_t dtmf_count;
@@ -92,6 +95,7 @@ typedef struct SCTE35DTMFDescriptor {
     uint8_t dtmf_char[256];
 } SCTE35DTMFDescriptor;
 
+// extension for splice_insert/time_signal, allows for sending of seg. msgs
 typedef struct SCTE35SegDescriptor {
     uint32_t segmentation_event_id;
     int segmentation_event_cancel_indicator;
@@ -117,6 +121,7 @@ typedef struct SCTE35SegDescriptor {
     uint8_t sub_segments_expected;
 } SCTE35SegDescriptor;
 
+// extension for splice_insert/null / time_signal, allows for wall clk time to be sent to client
 typedef struct SCTE35TimeDescriptor{
     uint64_t TAI_seconds;
     uint64_t TAI_ns;
