@@ -2119,18 +2119,22 @@ static void show_scte35_packet(WriterContext *w, SCTE35ParseSection *scte35_ptr)
     char command_type_str[50];
     char in_out_str[50];
     uint64_t pts_time;
+    int64_t stream_time;
     int duration;
+
     switch(scte35_ptr->splice_command_type){
         case SCTE35_CMD_NULL:
             strcpy(command_type_str, "NULL");
 	    strcpy(in_out_str, "N/A");
 	    pts_time = -1;
+	    stream_time = -1;
 	    duration = -1;
 	    break;
         case SCTE35_CMD_SCHEDULE:
 	    strcpy(command_type_str, "SCHEDULE");
 	    strcpy(in_out_str, "N/A");
 	    pts_time = -1;
+	    stream_time = -1;
             duration = -1;
 	    break;
         case SCTE35_CMD_INSERT:
@@ -2143,36 +2147,43 @@ static void show_scte35_packet(WriterContext *w, SCTE35ParseSection *scte35_ptr)
 		strcpy(in_out_str, "IN");
 	    }
             pts_time = scte35_ptr->cmd.insert.time.pts_time;
+	    stream_time = scte35_ptr->cur_pcr;
 	    break;
 	case SCTE35_CMD_TIME_SIGNAL:
-            strcpy(command_type_str, "TIME SIGNAL");
+            strcpy(command_type_str, "TIME_SIGNAL");
 	    strcpy(in_out_str, "N/A");
             duration = -1;
             pts_time = scte35_ptr->cmd.time_signal.time.pts_time;
+	    stream_time = scte35_ptr->cur_pcr;
             break;
 	case SCTE35_CMD_BW_RESERVATION:
-            strcpy(command_type_str, "BANDWIDTH RESERVATION");
+            strcpy(command_type_str, "BANDWIDTH_RESERVATION");
 	    strcpy(in_out_str, "N/A");
 	    pts_time = -1;
+	    stream_time = -1;
 	    duration = -1;
 	    break;
 	case SCTE35_CMD_PRIVATE_CMD:
             strcpy(command_type_str, "PRIVATE");
             strcpy(in_out_str, "N/A");
             pts_time = -1;
+	    stream_time = -1;
             duration = -1;
 	    break;
 	default:
 	    strcpy(command_type_str, "UNKNOWN");
 	    strcpy(in_out_str, "N/A");
 	    pts_time = -1;
+	    stream_time = -1;
 	    duration = -1;
 	    break;
 	}
         print_str("SCTE35_cmd_type", command_type_str);
+	print_int("SCTE35_stream_time", stream_time);
         print_int("SCTE35_pts_time", pts_time);
         print_str("SCTE35_in/out", in_out_str);
-	print_int("SCTE35_duration", duration); 
+	print_int("SCTE35_duration", duration);
+        printf("\n");	
         writer_print_section_footer(w);
         av_bprint_finalize(&pbuf, NULL);
         fflush(stdout);
@@ -2435,7 +2446,6 @@ static int parse_SCTE35(AVPacket *pkt, SCTE35ParseSection *scte35_ptr)
     scte35_ptr->splice_command_length = (((uint32_t)data_ptr[11] & 0x0f) << 8) +
 	                                ((uint32_t)data_ptr[12] & 0xff);
     scte35_ptr->splice_command_type = (int)data_ptr[13];
-    scte35_ptr->last_pcr = pkt->last_pcr;
 
     switch (scte35_ptr->splice_command_type){
         case SCTE35_CMD_NULL:
@@ -2523,7 +2533,6 @@ static int read_interval_packets(WriterContext *w, InputFile *ifile,
     int ret = 0, i = 0, frame_count = 0;
     int64_t start = -INT64_MAX, end = interval->end;
     int has_start = 0, has_end = interval->has_end && !interval->end_is_offset;
-    int64_t last_pcr = -1;
 
     av_init_packet(&pkt);
 
@@ -2560,10 +2569,11 @@ static int read_interval_packets(WriterContext *w, InputFile *ifile,
         goto end;
     }
 
+    // used for calculating SCTE35 packet pcr
     fmt_ctx->cur_packet_num = 0;
     fmt_ctx->last_pcr_packet_num = 0;
     SCTE35ParseSection scte35_parse;
-    int prev_pkt_scte35 = 0;
+    int prev_pkt_scte35 = 0; // tracks if prev packet was a SCTE35 packet
 
     while (!av_read_frame(fmt_ctx, &pkt)) {
 	packet_count++;
@@ -2574,11 +2584,17 @@ static int read_interval_packets(WriterContext *w, InputFile *ifile,
             nb_streams = fmt_ctx->nb_streams;
         }
 
+	// for printing contents of SCTE35 packet
         if (prev_pkt_scte35) {
-            if (scte35_parse.last_pcr_packet_num != fmt_ctx->last_pcr_packet_num && pkt.last_pcr != -1) {
+	    // with current and previous pcr/packet num, go thru one more iteration to get next pcr/packet num
+            if (scte35_parse.last_pcr_packet_num < fmt_ctx->last_pcr_packet_num) { // make sure between packets that there was a packet with a pcr timestamp
                 scte35_parse.next_pcr_packet_num = fmt_ctx->last_pcr_packet_num;
-	        scte35_parse.next_pcr = pkt.last_pcr;
-		prev_pkt_scte35 = 0;
+	        scte35_parse.next_pcr = fmt_ctx->last_pcr;
+		prev_pkt_scte35 = 0; // reset scte35 pkt flag
+		// calculate scte35 pcr: (((next_pcr - last_pcr) / (next_pcr_pkt_num - last_pcr_pkt_num)) * (cur_pkt_num - last_pcr_pkt_num)) + last_pcr
+		// value is divided by three-hundred to convert from 27MHz to 90KHz
+		scte35_parse.cur_pcr = (int64_t)(((((long double)(scte35_parse.next_pcr - scte35_parse.last_pcr) / (scte35_parse.next_pcr_packet_num - scte35_parse.last_pcr_packet_num)) * (scte35_parse.cur_packet_num - scte35_parse.last_pcr_packet_num)) + (scte35_parse.last_pcr)) / 300);
+	        show_scte35_packet(w, &scte35_parse);
 	    }
 	}
 
@@ -2587,9 +2603,11 @@ static int read_interval_packets(WriterContext *w, InputFile *ifile,
 	    if (par->codec_id == AV_CODEC_ID_SCTE_35) {
 		int ret_scte35 = 0;
 		scte35_parse_init(&scte35_parse);
-		
+	        
+	        // these are set outside of parse_SCTE35 since they rely on fmt_ctx	
 		scte35_parse.cur_packet_num = fmt_ctx->cur_packet_num;
 		scte35_parse.last_pcr_packet_num = fmt_ctx->last_pcr_packet_num;
+		scte35_parse.last_pcr = fmt_ctx->last_pcr;
 
 		ret_scte35 = parse_SCTE35(&pkt, &scte35_parse);
 		if (ret_scte35 != 0) 

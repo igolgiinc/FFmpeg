@@ -1954,6 +1954,7 @@ typedef struct AVFormatContext {
 
     uint64_t cur_packet_num;
     uint64_t last_pcr_packet_num;
+    int64_t last_pcr;
 } AVFormatContext;
 
 #if FF_API_FORMAT_GET_SET

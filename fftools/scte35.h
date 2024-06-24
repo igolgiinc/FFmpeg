@@ -154,10 +154,10 @@ typedef struct SCTE35ParseSection {
     int splice_command_type;
     int64_t cur_packet_num;
     int64_t last_pcr_packet_num;
-    int64_t last_pcr;
+    int64_t last_pcr; // in form of 27MHz clock ticks
     int64_t next_pcr_packet_num;
-    int64_t next_pcr;
-    int64_t cur_pcr;
+    int64_t next_pcr; // in form of 27MHz clock ticks
+    int64_t cur_pcr; // in form of 90KHz clock ticks
 
     union cmd {
         SCTE35SpliceInsert insert;

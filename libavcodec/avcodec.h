@@ -1473,7 +1473,6 @@ typedef struct AVPacket {
      * Can be AV_NOPTS_VALUE if it is not stored in the file.
      */
     int64_t dts;
-    int64_t last_pcr;
     uint8_t *data;
     int   size;
     int   stream_index;

@@ -139,6 +139,7 @@ struct MpegTSContext {
 
     int64_t cur_pcr;    /**< used to estimate the exact PCR */
     int pcr_incr;       /**< used to estimate the exact PCR */
+    int64_t last_pcr;
 
     /* data needed to handle file based ts */
     /** stop parsing loop */
@@ -2643,7 +2644,7 @@ static int handle_packet(MpegTSContext *ts, const uint8_t *packet)
         int pcr_l;
         if (parse_pcr(&pcr_h, &pcr_l, packet) == 0) {
             tss->last_pcr = pcr_h * 300 + pcr_l;
-	    ts->pkt->last_pcr = tss->last_pcr;
+	    ts->last_pcr = tss->last_pcr;
 	    ts->last_pcr_packet_num = ts->cur_packet_num;
 	}
         /* skip adaptation field */
@@ -3112,11 +3113,13 @@ static int mpegts_read_packet(AVFormatContext *s, AVPacket *pkt)
 
     ts->cur_packet_num = s->cur_packet_num;
     ts->last_pcr_packet_num = s->last_pcr_packet_num;
+    ts->last_pcr = s->last_pcr;
     pkt->size = -1;
     ts->pkt = pkt;
     ret = handle_packets(ts, 0);
     s->cur_packet_num = ts->cur_packet_num;
     s->last_pcr_packet_num = ts->last_pcr_packet_num; 
+    s->last_pcr = ts->last_pcr;
 
     if (ret < 0) {
         av_packet_unref(ts->pkt);
