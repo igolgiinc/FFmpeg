@@ -2110,6 +2110,7 @@ static void show_subtitle(WriterContext *w, AVSubtitle *sub, AVStream *stream,
     fflush(stdout);
 }
 
+// prints certain parameters from parsed SCTE35 packet
 static void show_scte35_packet(WriterContext *w, SCTE35ParseSection *scte35_ptr)
 {
     AVBPrint pbuf;
@@ -2120,8 +2121,10 @@ static void show_scte35_packet(WriterContext *w, SCTE35ParseSection *scte35_ptr)
     char in_out_str[50];
     uint64_t pts_time;
     int64_t stream_time;
+    int64_t packet_num;
     int duration;
 
+    // account for different types of SCTE35 packets
     switch(scte35_ptr->splice_command_type){
         case SCTE35_CMD_NULL:
             strcpy(command_type_str, "NULL");
@@ -2129,6 +2132,7 @@ static void show_scte35_packet(WriterContext *w, SCTE35ParseSection *scte35_ptr)
 	    pts_time = -1;
 	    stream_time = -1;
 	    duration = -1;
+	    packet_num = -1;
 	    break;
         case SCTE35_CMD_SCHEDULE:
 	    strcpy(command_type_str, "SCHEDULE");
@@ -2136,6 +2140,7 @@ static void show_scte35_packet(WriterContext *w, SCTE35ParseSection *scte35_ptr)
 	    pts_time = -1;
 	    stream_time = -1;
             duration = -1;
+	    packet_num = -1;
 	    break;
         case SCTE35_CMD_INSERT:
 	    strcpy(command_type_str, "INSERT");
@@ -2148,6 +2153,7 @@ static void show_scte35_packet(WriterContext *w, SCTE35ParseSection *scte35_ptr)
 	    }
             pts_time = scte35_ptr->cmd.insert.time.pts_time;
 	    stream_time = scte35_ptr->cur_pcr;
+	    packet_num = scte35_ptr->cur_packet_num;
 	    break;
 	case SCTE35_CMD_TIME_SIGNAL:
             strcpy(command_type_str, "TIME_SIGNAL");
@@ -2155,6 +2161,7 @@ static void show_scte35_packet(WriterContext *w, SCTE35ParseSection *scte35_ptr)
             duration = -1;
             pts_time = scte35_ptr->cmd.time_signal.time.pts_time;
 	    stream_time = scte35_ptr->cur_pcr;
+	    packet_num = scte35_ptr->cur_packet_num;
             break;
 	case SCTE35_CMD_BW_RESERVATION:
             strcpy(command_type_str, "BANDWIDTH_RESERVATION");
@@ -2162,6 +2169,7 @@ static void show_scte35_packet(WriterContext *w, SCTE35ParseSection *scte35_ptr)
 	    pts_time = -1;
 	    stream_time = -1;
 	    duration = -1;
+	    packet_num = -1;
 	    break;
 	case SCTE35_CMD_PRIVATE_CMD:
             strcpy(command_type_str, "PRIVATE");
@@ -2169,6 +2177,7 @@ static void show_scte35_packet(WriterContext *w, SCTE35ParseSection *scte35_ptr)
             pts_time = -1;
 	    stream_time = -1;
             duration = -1;
+	    packet_num = -1;
 	    break;
 	default:
 	    strcpy(command_type_str, "UNKNOWN");
@@ -2176,9 +2185,11 @@ static void show_scte35_packet(WriterContext *w, SCTE35ParseSection *scte35_ptr)
 	    pts_time = -1;
 	    stream_time = -1;
 	    duration = -1;
+	    packet_num = -1;
 	    break;
 	}
         print_str("SCTE35_cmd_type", command_type_str);
+	print_int("SCTE35_packet_num", packet_num);
 	print_int("SCTE35_stream_time", stream_time);
         print_int("SCTE35_pts_time", pts_time);
         print_str("SCTE35_in/out", in_out_str);
@@ -2416,6 +2427,7 @@ static void log_read_interval(const ReadInterval *interval, void *log_ctx, int l
     av_log(log_ctx, log_level, "\n");
 }
 
+// parses SCTE35 packet for parameters like pts_time
 static int parse_SCTE35(AVPacket *pkt, SCTE35ParseSection *scte35_ptr)
 {
     int rc = 0;
@@ -2572,8 +2584,10 @@ static int read_interval_packets(WriterContext *w, InputFile *ifile,
     // used for calculating SCTE35 packet pcr
     fmt_ctx->cur_packet_num = 0;
     fmt_ctx->last_pcr_packet_num = 0;
-    SCTE35ParseSection scte35_parse; // stores info on SCTE35 packet
-    int prev_pkt_scte35 = 0; // scte35 pkt flag, tracks if prev pkt was SCTE35
+    
+    // queue stores all scte35 pkts that have been parsed but not printed yet
+    SCTE35Queue scte35_queue;
+    create_queue(&scte35_queue);
 
     while (!av_read_frame(fmt_ctx, &pkt)) {
 	packet_count++;
@@ -2584,36 +2598,54 @@ static int read_interval_packets(WriterContext *w, InputFile *ifile,
             nb_streams = fmt_ctx->nb_streams;
         }
 
-	// section is for obtaining next pcr/packet_num to calculate SCTE35 pcr
-        if (prev_pkt_scte35 && do_read_frames) {
-	    // to get next pcr/packet_num, obtain from the next iteration after SCTE35 pkt
-            if (scte35_parse.last_pcr_packet_num < fmt_ctx->last_pcr_packet_num) { // make sure between packets that there was a packet with a pcr timestamp
-                scte35_parse.next_pcr_packet_num = fmt_ctx->last_pcr_packet_num;
-	        scte35_parse.next_pcr = fmt_ctx->last_pcr;
-		prev_pkt_scte35 = 0; // reset scte35 pkt flag
-		// calculate scte35 pcr: (((next_pcr - last_pcr) / (next_pcr_pkt_num - last_pcr_pkt_num)) * (cur_pkt_num - last_pcr_pkt_num)) + last_pcr
-		// value is divided by three-hundred to convert from 27MHz to 90KHz
-		scte35_parse.cur_pcr = (int64_t)(((((long double)(scte35_parse.next_pcr - scte35_parse.last_pcr) / (scte35_parse.next_pcr_packet_num - scte35_parse.last_pcr_packet_num)) * (scte35_parse.cur_packet_num - scte35_parse.last_pcr_packet_num)) + (scte35_parse.last_pcr)) / 300.0);
-		show_scte35_packet(w, &scte35_parse); // print contents of SCTE35 packet
+	// want to print SCTE35 info when -show_frames is enabled
+	// parsed SCTE35 pkts are intially stored because we need to find the next packet with a pcr timestamp
+	if (scte35_queue.size > 0 && do_read_frames) {
+	    SCTE35ParseSection *front_scte35 = front(&scte35_queue);
+	    // after we find the next packet with a pcr timestamp, we can print all the queued parsed SCTE35 pkts
+	    if (front_scte35->last_pcr_packet_num < fmt_ctx->last_pcr_packet_num) {
+	        while (!(check_queue_empty(&scte35_queue))) {
+                    SCTE35ParseSection *cur_scte35 = dequeue(&scte35_queue);
+		    cur_scte35->next_pcr_packet_num = fmt_ctx->last_pcr_packet_num;
+		    cur_scte35->next_pcr = fmt_ctx->last_pcr;
+		    // calculating the pcr of a SCTE35 pkt uses the previous and next pcr/packet numbers
+		    cur_scte35->cur_pcr = (int64_t)(((((long double)(cur_scte35->next_pcr - cur_scte35->last_pcr) / (cur_scte35->next_pcr_packet_num - cur_scte35->last_pcr_packet_num)) * (cur_scte35->cur_packet_num - cur_scte35->last_pcr_packet_num)) + (cur_scte35->last_pcr)) / 300.0);
+
+		    show_scte35_packet(w, cur_scte35);
+		    // have to free SCTE35ParseSection object since it was malloc'd
+		    free(cur_scte35);
+	        }
 	    }
 	}
 
         if (selected_streams[pkt.stream_index]) {
             AVCodecParameters *par = ifile->streams[pkt.stream_index].st->codecpar;
-	    if (par->codec_id == AV_CODEC_ID_SCTE_35) {
+	    // want to parse SCTE35 pkts when -show_frames is enabled
+	    if (par->codec_id == AV_CODEC_ID_SCTE_35 && do_read_frames) {
 		int ret_scte35 = 0;
-		scte35_parse_init(&scte35_parse);
+
+		// SCTE35ParseSection is malloc'd to prevent memory overwriting
+		SCTE35ParseSection *scte35_parse = (SCTE35ParseSection*)malloc(sizeof(SCTE35ParseSection));
+		if (scte35_parse == NULL) {
+	            perror("Failed to malloc SCTE35ParseSection\n");
+		    exit(EXIT_FAILURE);
+		}
+		scte35_parse_init(scte35_parse);
 	        
 	        // these are set outside of parse_SCTE35 since they rely on fmt_ctx	
-		scte35_parse.cur_packet_num = fmt_ctx->cur_packet_num;
-		scte35_parse.last_pcr_packet_num = fmt_ctx->last_pcr_packet_num;
-		scte35_parse.last_pcr = fmt_ctx->last_pcr;
+		scte35_parse->cur_packet_num = fmt_ctx->cur_packet_num;
+		scte35_parse->last_pcr_packet_num = fmt_ctx->last_pcr_packet_num;
+		scte35_parse->last_pcr = fmt_ctx->last_pcr;
 
-		ret_scte35 = parse_SCTE35(&pkt, &scte35_parse);
-		if (ret_scte35 != 0) 
-		    printf("\nIssue when parsing SCTE35\n");
-		else
-		    prev_pkt_scte35 = 1;
+		// fill scte35_parse object based on data field in pkt
+		ret_scte35 = parse_SCTE35(&pkt, scte35_parse);
+		if (ret_scte35 != 0) {
+		    fprintf(stderr, "Issue when parsing SCTE35\n");
+		    exit(EXIT_FAILURE);
+		}
+		// adds scte35_parse to be printed
+		enqueue(&scte35_queue, scte35_parse);
+		
 	    }
 
             AVRational tb = ifile->streams[pkt.stream_index].st->time_base;
@@ -2651,6 +2683,10 @@ static int read_interval_packets(WriterContext *w, InputFile *ifile,
         }
         av_packet_unref(&pkt);
     }
+
+    // prevent potential memory leaks from leftover SCTE35ParseSections
+    free_queue(&scte35_queue);
+
     av_init_packet(&pkt);
     pkt.data = NULL;
     pkt.size = 0;
