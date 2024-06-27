@@ -10,13 +10,15 @@
 #define SPLICE_DESCRIPTOR_DATA_MAX_SIZE 256
 
 // values for types of errors in scte35.c
-enum {
+enum 
+{
     SCTE35_MP_ERR_UNSUPPORTED_CMD = -1,
     SCTE35_MP_ERR_TABLE_ID = -2
 };
 
 // values for specific  SCTE35 splice commands
-enum {
+enum 
+{
     SCTE35_CMD_NULL = 0,
     SCTE35_CMD_SCHEDULE = 4,
     SCTE35_CMD_INSERT = 5,
@@ -26,7 +28,8 @@ enum {
 };
 
 // values for specific SCTE35 splice descriptors
-enum {
+enum 
+{
     SCTE35_SPLICE_DESCRIPTOR_AVAIL = 0,
     SCTE35_SPLICE_DESCRIPTOR_DTMF = 1,
     SCTE35_SPLICE_DESCRIPTOR_SEGMENTATION = 2,
@@ -35,27 +38,31 @@ enum {
 
 // if auto_return is one, then splicing device uses duration to determine when to return to network feed from a break
 // if auto_return is zero, a splice_insert will end a break
-typedef struct SCTE35BreakDuration {
+typedef struct SCTE35BreakDuration 
+{
     int auto_return; 
     int reserved; 
     uint64_t duration; // in terms of program's ninety kHz clock
 } SCTE35BreakDuration;
 
 // specifies time of splice event
-typedef struct SCTE35SpliceTime {
+typedef struct SCTE35SpliceTime 
+{
     int time_specified_flag; // if one, indicates pts_time is set
     int reserved;
     uint64_t pts_time; // in terms of program's ninety kHz clock
     int byte_offset;
 } SCTE35SpliceTime;
 
-typedef struct SCTE35SpliceComponent {
+typedef struct SCTE35SpliceComponent 
+{
     int component_tag; // represents elementary PID stream containing splice point
     SCTE35SpliceTime time;
 } SCTE35SpliceComponent;
 
 // sent at least once per splice event
-typedef struct SCTE35SpliceInsert {
+typedef struct SCTE35SpliceInsert 
+{
     int splice_event_id;
     int splice_event_cancel_indicator; // if set to one, means previous sent splice event was canceled
     int reserved_1;
@@ -74,7 +81,8 @@ typedef struct SCTE35SpliceInsert {
 } SCTE35SpliceInsert;
 
 // used to signal splice events
-typedef struct SCTE35Time {
+typedef struct SCTE35Time 
+{
     SCTE35SpliceTime time;
 } SCTE35Time;
 
@@ -84,12 +92,14 @@ typedef struct SCTE35SpliceSchedule {
 } SCTE35SpliceSchedule;*/
 
 // extension for splice_insert, allows for auth id to be sent for an avail
-typedef struct SCTE35AvailDescriptor {
+typedef struct SCTE35AvailDescriptor 
+{
     uint32_t provider_avail_id; 
 } SCTE35AvailDescriptor;
 
 // extension for splice_insert, allows for reciever to generate DTMF seq
-typedef struct SCTE35DTMFDescriptor {
+typedef struct SCTE35DTMFDescriptor 
+{
     uint8_t preroll;
     uint8_t dtmf_count;
     uint8_t reserved;
@@ -97,7 +107,8 @@ typedef struct SCTE35DTMFDescriptor {
 } SCTE35DTMFDescriptor;
 
 // extension for splice_insert/time_signal, allows for sending of seg. msgs
-typedef struct SCTE35SegDescriptor {
+typedef struct SCTE35SegDescriptor 
+{
     uint32_t segmentation_event_id;
     int segmentation_event_cancel_indicator;
     int reserved_1;
@@ -123,13 +134,15 @@ typedef struct SCTE35SegDescriptor {
 } SCTE35SegDescriptor;
 
 // extension for splice_insert/null / time_signal, allows for wall clk time to be sent to client
-typedef struct SCTE35TimeDescriptor{
+typedef struct SCTE35TimeDescriptor
+{
     uint64_t TAI_seconds;
     uint64_t TAI_ns;
     uint16_t UTC_offset;    
 } SCTE35TimeDescriptor;
 
-typedef struct SCTE35SpliceDesc {
+typedef struct SCTE35SpliceDesc 
+{
     uint8_t splice_descriptor_tag;
     uint8_t descriptor_length;
     uint32_t identifier;
@@ -144,7 +157,8 @@ typedef struct SCTE35SpliceDesc {
 } SCTE35SpliceDesc;
 
 // overall struct to hold parsed contents of SCTE35 packet
-typedef struct SCTE35ParseSection {
+typedef struct SCTE35ParseSection 
+{
     int table_id;
     int section_syntax_indicator;
     int private_indicator;
@@ -179,13 +193,15 @@ typedef struct SCTE35ParseSection {
 } SCTE35ParseSection;
 
 // represents parsed contents of SCTE35 packet in queue
-typedef struct SCTE35QueueElement {
+typedef struct SCTE35QueueElement 
+{
     SCTE35ParseSection *scte35_pkt;
     struct SCTE35QueueElement *next_pkt;
 } SCTE35QueueElement;
 
 // stores parsed contents of SCTE35 packets
-typedef struct SCTE35Queue {
+typedef struct SCTE35Queue 
+{
     SCTE35QueueElement *front;
     SCTE35QueueElement *back;
     int size;

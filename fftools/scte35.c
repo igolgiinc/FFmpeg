@@ -328,19 +328,22 @@ int parse_splice_descriptor(unsigned char *field, unsigned char *table,
 }
 
 // initializes SCTE35 queue
-void create_queue(SCTE35Queue* q) {
+void create_queue(SCTE35Queue* q) 
+{
     q->front = NULL;
     q->back = NULL;
     q->size = 0;
 }
 
 // returns one if SCTE35 queue is empty
-int check_queue_empty(SCTE35Queue* q) {
+int check_queue_empty(SCTE35Queue* q) 
+{
     return q->size == 0;
 }
 
 // Adds a parsed SCTE35 pkt to a SCTE35 queue
-void enqueue(SCTE35Queue* q, SCTE35ParseSection* scte35_pkt) {
+void enqueue(SCTE35Queue* q, SCTE35ParseSection* scte35_pkt) 
+{
     SCTE35QueueElement* newElement = (SCTE35QueueElement*)malloc(sizeof(SCTE35QueueElement));
     if (newElement == NULL) {
         perror("Failed to allocate memory");
@@ -360,7 +363,8 @@ void enqueue(SCTE35Queue* q, SCTE35ParseSection* scte35_pkt) {
 }
 
 // frees all remaining parsed SCTE35 pkts, if there are any
-void free_queue(SCTE35Queue *q) {
+void free_queue(SCTE35Queue *q) 
+{
     while (!(check_queue_empty(q))) {
         SCTE35ParseSection *scte35_pkt = dequeue(q);
 	free(scte35_pkt); // free SCTE35ParseSection as well, since it was malloc'd
@@ -368,7 +372,8 @@ void free_queue(SCTE35Queue *q) {
 }
 
 // removes first element on SCTE35 queue, returns it in form of ptr
-SCTE35ParseSection* dequeue(SCTE35Queue* q) {
+SCTE35ParseSection* dequeue(SCTE35Queue* q) 
+{
     SCTE35QueueElement *temp;
     SCTE35ParseSection *pkt;
     if (check_queue_empty(q)) {
@@ -386,7 +391,8 @@ SCTE35ParseSection* dequeue(SCTE35Queue* q) {
 }
 
 // return front of SCTE35 queue
-SCTE35ParseSection* front(SCTE35Queue* q) {
+SCTE35ParseSection* front(SCTE35Queue* q) 
+{
     if (check_queue_empty(q)) {
         fprintf(stderr, "Queue is empty\n");
 	exit(EXIT_FAILURE);

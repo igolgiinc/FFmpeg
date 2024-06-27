@@ -2110,6 +2110,37 @@ static void show_subtitle(WriterContext *w, AVSubtitle *sub, AVStream *stream,
     fflush(stdout);
 }
 
+static void show_scte35_json(WriterContext *w, SCTE35ParseSection *scte35_ptr) 
+{
+    print_int("SCTE35_table_id", scte35_ptr->table_id);
+    print_int("SCTE35_section_syntax_indicator", scte35_ptr->section_syntax_indicator);
+    print_int("SCTE35_private_indicator", scte35_ptr->private_indicator);
+    print_int("SCTE35_section_length", scte35_ptr->section_length);
+    print_int("SCTE35_protocol_version", scte35_ptr->protocol_version);
+    print_int("SCTE35_encrypted_packet", scte35_ptr->encrypted_packet);
+    print_int("SCTE35_encryption_algorithm", scte35_ptr->encryption_algorithm);
+    print_int("SCTE35_pts_adjustment", scte35_ptr->pts_adjustment);
+    print_int("SCTE35_cw_index", scte35_ptr->cw_index);
+    print_int("SCTE35_tier", scte35_ptr->tier);
+    print_int("SCTE35_splice_command_length", scte35_ptr->splice_command_length);
+    print_int("SCTE35_descriptor_loop_length", scte35_ptr->descriptor_loop_length);
+    print_int("SCTE35_num_alignment_bytes", scte35_ptr->num_alignment_bytes);
+    print_int("SCTE35_e_crc", scte35_ptr->e_crc);
+    
+    print_int("SCTE35_crc", scte35_ptr->crc);
+    if (scte35_ptr->splice_command_type == SCTE35_CMD_INSERT) {
+        print_int("SCTE35_INSERT_splice_event_id", scte35_ptr->cmd.insert.splice_event_id);
+	print_int("SCTE35_INSERT_splice_event_cancel_indicator", scte35_ptr->cmd.insert.splice_event_cancel_indicator);
+        print_int("SCTE35_INSERT_splice_immediate_flag", scte35_ptr->cmd.insert.splice_immediate_flag);
+        if (scte35_ptr->cmd.insert.component_count != -1)	
+	    print_int("SCTE35_INSERT_component_count", scte35_ptr->cmd.insert.component_count);
+	print_int("SCTE35_INSERT_unique_program_id", scte35_ptr->cmd.insert.unique_program_id);
+	print_int("SCTE35_INSERT_avail_num", scte35_ptr->cmd.insert.avail_num);
+	print_int("SCTE35_INSERT_avails_expected", scte35_ptr->cmd.insert.avails_expected);
+    }
+
+}
+
 // prints certain parameters from parsed SCTE35 packet
 static void show_scte35_packet(WriterContext *w, SCTE35ParseSection *scte35_ptr)
 {
@@ -2118,87 +2149,61 @@ static void show_scte35_packet(WriterContext *w, SCTE35ParseSection *scte35_ptr)
     writer_print_section_header(w, SECTION_ID_SCTE35);
 		    		    
     char command_type_str[50];
-    char in_out_str[50];
-    uint64_t pts_time;
-    int64_t stream_time;
-    int64_t packet_num;
-    int duration;
 
+    int splice_command_type = scte35_ptr->splice_command_type;
     // account for different types of SCTE35 packets
-    switch(scte35_ptr->splice_command_type){
+    switch(splice_command_type){
         case SCTE35_CMD_NULL:
             strcpy(command_type_str, "NULL");
-	    strcpy(in_out_str, "N/A");
-	    pts_time = -1;
-	    stream_time = -1;
-	    duration = -1;
-	    packet_num = -1;
 	    break;
         case SCTE35_CMD_SCHEDULE:
 	    strcpy(command_type_str, "SCHEDULE");
-	    strcpy(in_out_str, "N/A");
-	    pts_time = -1;
-	    stream_time = -1;
-            duration = -1;
-	    packet_num = -1;
 	    break;
         case SCTE35_CMD_INSERT:
 	    strcpy(command_type_str, "INSERT");
-	    if (scte35_ptr->cmd.insert.out_of_network_indicator) {
-                duration = scte35_ptr->cmd.insert.break_duration.duration;
-	        strcpy(in_out_str, "OUT");	
-	    } else {
-		duration = -1;
-		strcpy(in_out_str, "IN");
-	    }
-            pts_time = scte35_ptr->cmd.insert.time.pts_time;
-	    stream_time = scte35_ptr->cur_pcr;
-	    packet_num = scte35_ptr->cur_packet_num;
 	    break;
 	case SCTE35_CMD_TIME_SIGNAL:
             strcpy(command_type_str, "TIME_SIGNAL");
-	    strcpy(in_out_str, "N/A");
-            duration = -1;
-            pts_time = scte35_ptr->cmd.time_signal.time.pts_time;
-	    stream_time = scte35_ptr->cur_pcr;
-	    packet_num = scte35_ptr->cur_packet_num;
             break;
 	case SCTE35_CMD_BW_RESERVATION:
             strcpy(command_type_str, "BANDWIDTH_RESERVATION");
-	    strcpy(in_out_str, "N/A");
-	    pts_time = -1;
-	    stream_time = -1;
-	    duration = -1;
-	    packet_num = -1;
 	    break;
 	case SCTE35_CMD_PRIVATE_CMD:
             strcpy(command_type_str, "PRIVATE");
-            strcpy(in_out_str, "N/A");
-            pts_time = -1;
-	    stream_time = -1;
-            duration = -1;
-	    packet_num = -1;
 	    break;
 	default:
 	    strcpy(command_type_str, "UNKNOWN");
-	    strcpy(in_out_str, "N/A");
-	    pts_time = -1;
-	    stream_time = -1;
-	    duration = -1;
-	    packet_num = -1;
 	    break;
-	}
-        print_str("SCTE35_cmd_type", command_type_str);
-	print_int("SCTE35_packet_num", packet_num);
-	print_int("SCTE35_stream_time", stream_time);
-        print_int("SCTE35_pts_time", pts_time);
-        print_str("SCTE35_in/out", in_out_str);
-	print_int("SCTE35_duration", duration);
-        printf("\n");	
-        writer_print_section_footer(w);
-        av_bprint_finalize(&pbuf, NULL);
-        fflush(stdout);
+    }    
+    print_str("SCTE35_cmd_type", command_type_str);
 
+    if (splice_command_type == SCTE35_CMD_INSERT || splice_command_type == SCTE35_CMD_TIME_SIGNAL) {
+	print_int("SCTE35_packet_num", scte35_ptr->cur_packet_num);
+        print_ts("SCTE35_stream_time", scte35_ptr->cur_pcr);
+	if (splice_command_type == SCTE35_CMD_INSERT) {
+	    print_ts("SCTE35_pts_time", scte35_ptr->cmd.insert.time.pts_time);
+	    if (scte35_ptr->cmd.insert.out_of_network_indicator) {
+		print_str("SCTE35_in_out", "OUT");
+	        print_int("SCTE35_auto_return", scte35_ptr->cmd.insert.break_duration.auto_return);
+		if (scte35_ptr->cmd.insert.duration_flag) 	
+	            print_int("SCTE35_duration", scte35_ptr->cmd.insert.break_duration.duration);
+	    } else {
+	        print_str("SCTE35_in_out", "IN");
+	    }
+	} else {
+            print_ts("SCTE35_pts_time", scte35_ptr->cmd.time_signal.time.pts_time);
+	}
+
+	if (!strcmp(print_format, "json")) {
+            show_scte35_json(w, scte35_ptr);    
+        } else {
+	    printf("\n");
+        }
+    }
+
+    writer_print_section_footer(w);
+    av_bprint_finalize(&pbuf, NULL);
+    fflush(stdout);
 }
 
 static void show_frame(WriterContext *w, AVFrame *frame, AVStream *stream,
@@ -2601,6 +2606,7 @@ static int read_interval_packets(WriterContext *w, InputFile *ifile,
 	// want to print SCTE35 info when -show_frames is enabled
 	// parsed SCTE35 pkts are intially stored because we need to find the next packet with a pcr timestamp
 	if (scte35_queue.size > 0 && do_read_frames) {
+	    int64_t delta_t;
 	    SCTE35ParseSection *front_scte35 = front(&scte35_queue);
 	    // after we find the next packet with a pcr timestamp, we can print all the queued parsed SCTE35 pkts
 	    if (front_scte35->last_pcr_packet_num < fmt_ctx->last_pcr_packet_num) {
@@ -2609,8 +2615,9 @@ static int read_interval_packets(WriterContext *w, InputFile *ifile,
 		    cur_scte35->next_pcr_packet_num = fmt_ctx->last_pcr_packet_num;
 		    cur_scte35->next_pcr = fmt_ctx->last_pcr;
 		    // calculating the pcr of a SCTE35 pkt uses the previous and next pcr/packet numbers
-		    cur_scte35->cur_pcr = (int64_t)(((((long double)(cur_scte35->next_pcr - cur_scte35->last_pcr) / (cur_scte35->next_pcr_packet_num - cur_scte35->last_pcr_packet_num)) * (cur_scte35->cur_packet_num - cur_scte35->last_pcr_packet_num)) + (cur_scte35->last_pcr)) / 300.0);
-
+                    delta_t = (cur_scte35->next_pcr - cur_scte35->last_pcr) * (cur_scte35->cur_packet_num - cur_scte35->last_pcr_packet_num);
+		    delta_t /= (cur_scte35->next_pcr_packet_num - cur_scte35->last_pcr_packet_num);
+		    cur_scte35->cur_pcr = (cur_scte35->last_pcr + delta_t) / 300;
 		    show_scte35_packet(w, cur_scte35);
 		    // have to free SCTE35ParseSection object since it was malloc'd
 		    free(cur_scte35);
@@ -2690,7 +2697,7 @@ static int read_interval_packets(WriterContext *w, InputFile *ifile,
     av_init_packet(&pkt);
     pkt.data = NULL;
     pkt.size = 0;
-    //Flush remaining frames that are cached in the decoder
+    // Flush remaining frames that are cached in the decoder
     for (i = 0; i < fmt_ctx->nb_streams; i++) {
         pkt.stream_index = i;
         if (do_read_frames)
