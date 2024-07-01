@@ -4,7 +4,7 @@
 // clears values in break duration struct
 static void scte35_break_init(SCTE35BreakDuration *ptr)
 {
-    ptr->auto_return = -1;
+    ptr->auto_return = 0;
     ptr->reserved = 0;
     ptr->duration = -1;
 }
@@ -187,8 +187,8 @@ static int parse_splice_avail(unsigned char *field, unsigned char *table,
     unsigned char *pdat = field;
     memset(ad, 0, sizeof(*ad));
     ad->provider_avail_id = ((((uint64_t)*pdat) & 0xff) << 24) + 
-	                    ((((uint64_t)*(pdat + 1)) & 0xff) << 16) +
-			    ((((uint64_t)*(pdat + 2)) & 0xff) << 8) +
+	                    ((((uint64_t)*(pdat + 1)) & 0xff) << 16) + 
+			    ((((uint64_t)*(pdat + 2)) & 0xff) << 8) + 
 			    (((uint64_t)*(pdat + 3)) & 0xff);
     pdat += 4;
     
