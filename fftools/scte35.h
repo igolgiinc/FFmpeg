@@ -4,6 +4,7 @@
 #include "config.h"
 #include "cmdutils.h"
 #include "stdio.h"
+#include "scte35_dict.h"
 
 #define SPLICE_INFO_FIXED_SIZE 14
 #define MAX_SCTE35_SPLICE_COMPONENTS 10
@@ -195,8 +196,8 @@ typedef struct SCTE35ParseSection
 // represents parsed contents of SCTE35 packet in queue
 typedef struct SCTE35QueueElement 
 {
-    SCTE35ParseSection *scte35_pkt;
-    struct SCTE35QueueElement *next_pkt;
+    void *data;
+    struct SCTE35QueueElement *next;
 } SCTE35QueueElement;
 
 // stores parsed contents of SCTE35 packets
@@ -210,9 +211,17 @@ typedef struct SCTE35Queue
 void create_queue(SCTE35Queue* q);
 int check_queue_empty(SCTE35Queue *q);
 void free_queue(SCTE35Queue *q);
-void enqueue(SCTE35Queue *q, SCTE35ParseSection *scte35_pkt);
-SCTE35ParseSection* dequeue(SCTE35Queue *q);
-SCTE35ParseSection* front(SCTE35Queue *q);
+void enqueue(SCTE35Queue *q, void *data);
+void* dequeue(SCTE35Queue *q);
+SCTE35QueueElement* front(SCTE35Queue *q);
+
+typedef struct SCTE35TimeStruct {
+    int64_t last_pcr_time;
+    int64_t last_pcr_packet_num;
+    int64_t cur_packet_num;
+    int64_t next_pcr_time;
+    int64_t next_pcr_packet_num;
+} SCTE35TimeStruct;
 
 void scte35_parse_init(SCTE35ParseSection *scte35_ptr);
 int parse_insert(unsigned char *cmd, unsigned char *table, SCTE35ParseSection *scte35_ptr);

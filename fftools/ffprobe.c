@@ -130,6 +130,8 @@ typedef struct ReadInterval {
     int duration_frames;
 } ReadInterval;
 
+#define NUM_BUCKETS 149
+
 static ReadInterval *read_intervals;
 static int read_intervals_nb = 0;
 
@@ -2607,7 +2609,8 @@ static int read_interval_packets(WriterContext *w, InputFile *ifile,
 	// parsed SCTE35 pkts are intially stored because we need to find the next packet with a pcr timestamp
 	if (scte35_queue.size > 0 && do_read_frames) {
 	    int64_t delta_t;
-	    SCTE35ParseSection *front_scte35 = front(&scte35_queue);
+	    SCTE35QueueElement *front_elem = front(&scte35_queue);
+	    SCTE35ParseSection *front_scte35 = front_elem->data;
 	    // after we find the next packet with a pcr timestamp, we can print all the queued parsed SCTE35 pkts
 	    if (front_scte35->last_pcr_packet_num < fmt_ctx->last_pcr_packet_num) {
 	        while (!(check_queue_empty(&scte35_queue))) {
@@ -2621,6 +2624,7 @@ static int read_interval_packets(WriterContext *w, InputFile *ifile,
 		    show_scte35_packet(w, cur_scte35);
 		    // have to free SCTE35ParseSection object since it was malloc'd
 		    free(cur_scte35);
+		    cur_scte35 = NULL;
 	        }
 	    }
 	}
@@ -3232,6 +3236,190 @@ static void close_input_file(InputFile *ifile)
     ifile->nb_streams = 0;
 
     avformat_close_input(&ifile->fmt_ctx);
+}
+
+static int scan_interval_packets(SCTE35Dictionary* dict, InputFile *ifile, 
+		                 const ReadInterval *interval, int64_t *cur_ts)
+{
+    AVFormatContext *fmt_ctx = ifile->fmt_ctx;
+    AVPacket pkt;
+    SCTE35Queue time_queue;
+    int ret = 0, frame_count = 0;
+    int64_t start = -INT64_MAX, end = interval->end;
+    int has_start = 0, has_end = interval->has_end && !interval->end_is_offset;
+
+    av_init_packet(&pkt);
+
+    av_log(NULL, AV_LOG_VERBOSE, "Processing read interval ");
+    log_read_interval(interval, NULL, AV_LOG_VERBOSE);
+
+    if (interval->has_start) {
+        int64_t target;
+        if (interval->start_is_offset) {
+            if (*cur_ts == AV_NOPTS_VALUE) {
+                av_log(NULL, AV_LOG_ERROR,
+                       "Could not seek to relative position since current "
+                       "timestamp is not defined\n");
+                ret = AVERROR(EINVAL);
+                goto end;
+            }
+            target = *cur_ts + interval->start;
+        } else {
+            target = interval->start;
+        }
+
+        av_log(NULL, AV_LOG_VERBOSE, "Seeking to read interval start point %s\n",
+               av_ts2timestr(target, &AV_TIME_BASE_Q));
+        if ((ret = avformat_seek_file(fmt_ctx, -1, -INT64_MAX, target, INT64_MAX, 0)) < 0) {
+            av_log(NULL, AV_LOG_ERROR, "Could not seek to position %"PRId64": %s\n",
+                   interval->start, av_err2str(ret));
+            goto end;
+        }
+    }
+
+    fmt_ctx->cur_packet_num = 0;
+    fmt_ctx->last_pcr_packet_num = 0;
+    create_queue(&time_queue);
+
+    while (!av_read_frame(fmt_ctx, &pkt)) {
+        if (fmt_ctx->nb_streams > nb_streams) {
+            REALLOCZ_ARRAY_STREAM(nb_streams_frames,  nb_streams, fmt_ctx->nb_streams);
+            REALLOCZ_ARRAY_STREAM(nb_streams_packets, nb_streams, fmt_ctx->nb_streams);
+            REALLOCZ_ARRAY_STREAM(selected_streams,   nb_streams, fmt_ctx->nb_streams);
+            nb_streams = fmt_ctx->nb_streams;
+        }
+
+        if (time_queue.size > 0) {
+	    SCTE35QueueElement *front_elem = front(&time_queue);
+	    SCTE35TimeStruct *front_time = front_elem->data;
+	    if (front_time->last_pcr_packet_num < fmt_ctx->last_pcr_packet_num) {
+                while (!(check_queue_empty(&time_queue))) {
+		    SCTE35TimeStruct *cur_time = dequeue(&time_queue);
+		    cur_time->next_pcr_packet_num = fmt_ctx->last_pcr_packet_num;
+		    cur_time->next_pcr_time = fmt_ctx->last_pcr;
+		    insert(dict, cur_time->cur_packet_num, cur_time);		    
+		}
+	    }
+	}	
+
+        if (selected_streams[pkt.stream_index]) {
+            AVCodecParameters *par = ifile->streams[pkt.stream_index].st->codecpar;
+            AVRational tb = ifile->streams[pkt.stream_index].st->time_base;
+
+            if (pkt.pts != AV_NOPTS_VALUE)
+                *cur_ts = av_rescale_q(pkt.pts, tb, AV_TIME_BASE_Q);
+
+            if (!has_start && *cur_ts != AV_NOPTS_VALUE) {
+                start = *cur_ts;
+                has_start = 1;
+            }
+
+            if (has_start && !has_end && interval->end_is_offset) {
+                end = start + interval->end;
+                has_end = 1;
+            }
+
+            if (interval->end_is_offset && interval->duration_frames) {
+                if (frame_count >= interval->end)
+                    break;
+            } else if (has_end && *cur_ts != AV_NOPTS_VALUE && *cur_ts >= end) {
+                break;
+            }
+	    frame_count++;
+
+	    if (par->codec_id == AV_CODEC_ID_SCTE_35) {
+                SCTE35TimeStruct *scte35_time = (SCTE35TimeStruct*)malloc(sizeof(SCTE35TimeStruct));
+                if (scte35_time == NULL) {
+		    perror("Failed to malloc SCTE35TimeStruct\n");
+		    exit(EXIT_FAILURE);
+		}
+                scte35_time->cur_packet_num = fmt_ctx->cur_packet_num;
+                scte35_time->last_pcr_packet_num = fmt_ctx->last_pcr_packet_num;
+                scte35_time->last_pcr_time = fmt_ctx->last_pcr;
+
+                enqueue(&time_queue, scte35_time);		
+	    }
+
+        }
+	av_packet_unref(&pkt);
+
+    }
+
+    free_queue(&time_queue);
+
+end:
+    return ret;
+}
+
+static int scan_packets(SCTE35Dictionary* dict, InputFile *ifile)
+{
+    AVFormatContext *fmt_ctx = ifile->fmt_ctx;
+    int i, ret = 0;
+    int64_t cur_ts = fmt_ctx->start_time;
+
+    if (read_intervals_nb == 0) {
+        ReadInterval interval = (ReadInterval) { .has_start = 0, .has_end = 0 };
+        ret = scan_interval_packets(dict, ifile, &interval, &cur_ts);
+    } else {
+        for (i = 0; i < read_intervals_nb; i++) {
+            ret = scan_interval_packets(dict, ifile, &read_intervals[i], &cur_ts);
+            if (ret < 0)
+                break;
+        }
+    }
+
+    return ret;
+
+}
+
+static int scan_file(SCTE35Dictionary* dict, const char *filename) 
+{
+    InputFile ifile = { 0 };
+    int ret, i;
+
+    do_read_frames = do_show_frames || do_count_frames;
+    do_read_packets = do_show_packets || do_count_packets;
+
+    ret = open_input_file(&ifile, filename);
+    if (ret < 0)
+        goto end;
+
+#define CHECK_END if (ret < 0) goto end
+
+    nb_streams = ifile.fmt_ctx->nb_streams;
+    REALLOCZ_ARRAY_STREAM(nb_streams_frames,0,ifile.fmt_ctx->nb_streams);
+    REALLOCZ_ARRAY_STREAM(nb_streams_packets,0,ifile.fmt_ctx->nb_streams);
+    REALLOCZ_ARRAY_STREAM(selected_streams,0,ifile.fmt_ctx->nb_streams);
+
+    for (i = 0; i < ifile.fmt_ctx->nb_streams; i++) {
+        if (stream_specifier) {
+            ret = avformat_match_stream_specifier(ifile.fmt_ctx,
+                                                  ifile.fmt_ctx->streams[i],
+                                                  stream_specifier);
+            CHECK_END;
+            else
+                selected_streams[i] = ret;
+            ret = 0;
+        } else {
+            selected_streams[i] = 1;
+        }
+        if (!selected_streams[i])
+            ifile.fmt_ctx->streams[i]->discard = AVDISCARD_ALL;
+    }
+
+    if (do_read_frames || do_read_packets) {
+        ret = scan_packets(dict, &ifile);
+        CHECK_END;
+    }
+
+end:
+    if (ifile.fmt_ctx)
+        close_input_file(&ifile);
+    av_freep(&nb_streams_frames);
+    av_freep(&nb_streams_packets);
+    av_freep(&selected_streams);
+
+    return ret;
 }
 
 static int probe_file(WriterContext *wctx, const char *filename)
@@ -3955,7 +4143,11 @@ int main(int argc, char **argv)
             av_log(NULL, AV_LOG_ERROR, "Use -h to get full help or, even better, run 'man %s'.\n", program_name);
             ret = AVERROR(EINVAL);
         } else if (input_filename) {
+	    SCTE35Dictionary *dict = init_dictionary(NUM_BUCKETS, sizeof(SCTE35TimeStruct));
+	    scan_file(dict, input_filename);
             ret = probe_file(wctx, input_filename);
+	    free_dict(dict);
+	    dict = NULL;
             if (ret < 0 && do_show_error)
                 show_error(wctx, ret);
         }

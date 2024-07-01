@@ -342,7 +342,7 @@ int check_queue_empty(SCTE35Queue* q)
 }
 
 // Adds a parsed SCTE35 pkt to a SCTE35 queue
-void enqueue(SCTE35Queue* q, SCTE35ParseSection* scte35_pkt) 
+void enqueue(SCTE35Queue* q, void* data) 
 {
     SCTE35QueueElement* newElement = (SCTE35QueueElement*)malloc(sizeof(SCTE35QueueElement));
     if (newElement == NULL) {
@@ -350,13 +350,13 @@ void enqueue(SCTE35Queue* q, SCTE35ParseSection* scte35_pkt)
         exit(EXIT_FAILURE);
     }
 
-    newElement->scte35_pkt = scte35_pkt;
-    newElement->next_pkt = NULL;
+    newElement->data = data;
+    newElement->next = NULL;
     if (check_queue_empty(q)) {
         q->front = newElement;
 	q->back = newElement;
     } else {
-	q->back->next_pkt = newElement;
+	q->back->next = newElement;
 	q->back = newElement;
     }
     q->size++;
@@ -366,36 +366,38 @@ void enqueue(SCTE35Queue* q, SCTE35ParseSection* scte35_pkt)
 void free_queue(SCTE35Queue *q) 
 {
     while (!(check_queue_empty(q))) {
-        SCTE35ParseSection *scte35_pkt = dequeue(q);
-	free(scte35_pkt); // free SCTE35ParseSection as well, since it was malloc'd
+        void *data = dequeue(q);
+	free(data); // free SCTE35ParseSection as well, since it was malloc'd
+	data = NULL;
     }
 }
 
 // removes first element on SCTE35 queue, returns it in form of ptr
-SCTE35ParseSection* dequeue(SCTE35Queue* q) 
+void* dequeue(SCTE35Queue* q) 
 {
     SCTE35QueueElement *temp;
-    SCTE35ParseSection *pkt;
+    void *data;
     if (check_queue_empty(q)) {
         fprintf(stderr, "Queue is empty\n");
 	exit(EXIT_FAILURE);
     }
     temp = q->front;
-    pkt = temp->scte35_pkt;
-    q->front = q->front->next_pkt;
+    data = temp->data;
+    q->front = q->front->next;
     if (q->front == NULL)
         q->back = NULL;
     free(temp);
+    temp = NULL;
     q->size--;
-    return pkt;    
+    return data;    
 }
 
 // return front of SCTE35 queue
-SCTE35ParseSection* front(SCTE35Queue* q) 
+SCTE35QueueElement* front(SCTE35Queue* q) 
 {
     if (check_queue_empty(q)) {
         fprintf(stderr, "Queue is empty\n");
 	exit(EXIT_FAILURE);
     }
-    return q->front->scte35_pkt;
+    return q->front;
 }
