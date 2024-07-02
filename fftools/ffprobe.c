@@ -130,7 +130,7 @@ typedef struct ReadInterval {
     int duration_frames;
 } ReadInterval;
 
-#define NUM_BUCKETS 149
+#define NUM_BUCKETS 65537 
 
 static ReadInterval *read_intervals;
 static int read_intervals_nb = 0;
@@ -2147,10 +2147,9 @@ static void show_scte35_json(WriterContext *w, SCTE35ParseSection *scte35_ptr)
 static void show_scte35_packet(WriterContext *w, SCTE35ParseSection *scte35_ptr)
 {
     AVBPrint pbuf;
+    char command_type_str[50];
     av_bprint_init(&pbuf, 1, AV_BPRINT_SIZE_UNLIMITED);
     writer_print_section_header(w, SECTION_ID_SCTE35);
-		    		    
-    char command_type_str[50];
 
     int splice_command_type = scte35_ptr->splice_command_type;
     // account for different types of SCTE35 packets
@@ -2209,7 +2208,7 @@ static void show_scte35_packet(WriterContext *w, SCTE35ParseSection *scte35_ptr)
 }
 
 static void show_frame(WriterContext *w, AVFrame *frame, AVStream *stream,
-                       AVFormatContext *fmt_ctx)
+                       AVFormatContext *fmt_ctx, int64_t frame_pcr)
 {
     AVBPrint pbuf;
     char val_str[128];
@@ -2223,6 +2222,9 @@ static void show_frame(WriterContext *w, AVFrame *frame, AVStream *stream,
     s = av_get_media_type_string(stream->codecpar->codec_type);
     if (s) print_str    ("media_type", s);
     else   print_str_opt("media_type", "unknown");
+    print_int("packet_num",             fmt_ctx->cur_packet_num);
+    if (frame_pcr != -1) 
+        print_int("PCR",                frame_pcr);
     print_int("stream_index",           stream->index);
     print_int("key_frame",              frame->key_frame);
     print_ts  ("pkt_pts",               frame->pts);
@@ -2343,97 +2345,6 @@ static void show_frame(WriterContext *w, AVFrame *frame, AVStream *stream,
     fflush(stdout);
 }
 
-static av_always_inline int process_frame(WriterContext *w,
-                                          InputFile *ifile,
-                                          AVFrame *frame, AVPacket *pkt,
-                                          int *packet_new)
-{
-    AVFormatContext *fmt_ctx = ifile->fmt_ctx;
-    AVCodecContext *dec_ctx = ifile->streams[pkt->stream_index].dec_ctx;
-    AVCodecParameters *par = ifile->streams[pkt->stream_index].st->codecpar;
-    AVSubtitle sub;
-    int ret = 0, got_frame = 0;
-
-    clear_log(1);
-    if (dec_ctx && dec_ctx->codec) {
-        switch (par->codec_type) {
-        case AVMEDIA_TYPE_VIDEO:
-        case AVMEDIA_TYPE_AUDIO:
-            if (*packet_new) {
-                ret = avcodec_send_packet(dec_ctx, pkt);
-                if (ret == AVERROR(EAGAIN)) {
-                    ret = 0;
-                } else if (ret >= 0 || ret == AVERROR_EOF) {
-                    ret = 0;
-                    *packet_new = 0;
-                }
-            }
-            if (ret >= 0) {
-                ret = avcodec_receive_frame(dec_ctx, frame);
-                if (ret >= 0) {
-                    got_frame = 1;
-                } else if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) {
-                    ret = 0;
-                }
-            }
-            break;
-        case AVMEDIA_TYPE_SUBTITLE:
-            if (*packet_new)
-                ret = avcodec_decode_subtitle2(dec_ctx, &sub, &got_frame, pkt);
-            *packet_new = 0;
-            break;
-        default:
-            *packet_new = 0;
-        }
-    } else {
-	/*
-	if (par->codec_id == AV_CODEC_ID_SCTE_35 && pkt->buf != 0x0) {
-      	    printf("SCTE-35 detected in process_frame\n");
-	}*/
-        *packet_new = 0;
-    }
-
-    if (ret < 0)
-        return ret;
-    if (got_frame) {
-	
-        int is_sub = (par->codec_type == AVMEDIA_TYPE_SUBTITLE);
-        nb_streams_frames[pkt->stream_index]++;
-        if (do_show_frames)
-            if (is_sub)
-                show_subtitle(w, &sub, ifile->streams[pkt->stream_index].st, fmt_ctx);
-            else
-                show_frame(w, frame, ifile->streams[pkt->stream_index].st, fmt_ctx);
-        if (is_sub)
-            avsubtitle_free(&sub);
-    }
-    return got_frame || *packet_new;
-}
-
-static void log_read_interval(const ReadInterval *interval, void *log_ctx, int log_level)
-{
-    av_log(log_ctx, log_level, "id:%d", interval->id);
-
-    if (interval->has_start) {
-        av_log(log_ctx, log_level, " start:%s%s", interval->start_is_offset ? "+" : "",
-               av_ts2timestr(interval->start, &AV_TIME_BASE_Q));
-    } else {
-        av_log(log_ctx, log_level, " start:N/A");
-    }
-
-    if (interval->has_end) {
-        av_log(log_ctx, log_level, " end:%s", interval->end_is_offset ? "+" : "");
-        if (interval->duration_frames)
-            av_log(log_ctx, log_level, "#%"PRId64, interval->end);
-        else
-            av_log(log_ctx, log_level, "%s", av_ts2timestr(interval->end, &AV_TIME_BASE_Q));
-    } else {
-        av_log(log_ctx, log_level, " end:N/A");
-    }
-
-    av_log(log_ctx, log_level, "\n");
-}
-
 // parses SCTE35 packet for parameters like pts_time
 static int parse_SCTE35(AVPacket *pkt, SCTE35ParseSection *scte35_ptr)
 {
@@ -2543,6 +2454,143 @@ static int parse_SCTE35(AVPacket *pkt, SCTE35ParseSection *scte35_ptr)
     return rc;
 }
 
+static av_always_inline int process_frame(SCTE35Dictionary *dict, WriterContext *w,
+                                          InputFile *ifile,
+                                          AVFrame *frame, AVPacket *pkt,
+                                          int *packet_new)
+{
+    AVFormatContext *fmt_ctx = ifile->fmt_ctx;
+    AVCodecContext *dec_ctx = ifile->streams[pkt->stream_index].dec_ctx;
+    AVCodecParameters *par = ifile->streams[pkt->stream_index].st->codecpar;
+    AVSubtitle sub;
+    int ret = 0, got_frame = 0;
+    int delta_t;
+    int ft_delta;
+    int ret_scte35;
+    int64_t frame_pcr;
+
+    clear_log(1);
+    if (dec_ctx && dec_ctx->codec) {
+        switch (par->codec_type) {
+        case AVMEDIA_TYPE_VIDEO:
+        case AVMEDIA_TYPE_AUDIO:
+            if (*packet_new) {
+                ret = avcodec_send_packet(dec_ctx, pkt);
+                if (ret == AVERROR(EAGAIN)) {
+                    ret = 0;
+                } else if (ret >= 0 || ret == AVERROR_EOF) {
+                    ret = 0;
+                    *packet_new = 0;
+                }
+            }
+            if (ret >= 0) {
+                ret = avcodec_receive_frame(dec_ctx, frame);
+                if (ret >= 0) {
+                    got_frame = 1;
+                } else if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) {
+                    ret = 0;
+                }
+            }
+            break;
+        case AVMEDIA_TYPE_SUBTITLE:
+            if (*packet_new)
+                ret = avcodec_decode_subtitle2(dec_ctx, &sub, &got_frame, pkt);
+            *packet_new = 0;
+            break;
+        default:
+            *packet_new = 0;
+        }
+    } else {
+	if (par->codec_id == AV_CODEC_ID_SCTE_35 && pkt->buf != 0x0) {
+      	    printf("SCTE-35 detected in process_frame\n");
+            ret_scte35 = 0;
+            delta_t = 0;
+
+            // SCTE35ParseSection is malloc'd to prevent memory overwriting
+	    SCTE35ParseSection *scte35_parse = (SCTE35ParseSection*)malloc(sizeof(SCTE35ParseSection));
+	    if (scte35_parse == NULL) {
+	        perror("Failed to malloc SCTE35ParseSection\n");
+		exit(EXIT_FAILURE);
+	    }
+	    scte35_parse_init(scte35_parse);
+	        
+	    SCTE35TimeStruct *time_info = find(dict, fmt_ctx->cur_packet_num);
+	    // these are set outside of parse_SCTE35 since they rely on SCTE35TimeStruct (from scan)	
+            scte35_parse->cur_packet_num = fmt_ctx->cur_packet_num;
+            scte35_parse->last_pcr_packet_num = time_info->last_pcr_packet_num;
+	    scte35_parse->last_pcr = time_info->last_pcr_time;
+	    scte35_parse->next_pcr = time_info->next_pcr_time;
+	    scte35_parse->next_pcr_packet_num = time_info->next_pcr_packet_num;
+
+	    // fill scte35_parse object based on data field in pkt
+	    ret_scte35 = parse_SCTE35(pkt, scte35_parse);
+	    if (ret_scte35 != 0) {
+	        fprintf(stderr, "Issue when parsing SCTE35\n");
+		exit(EXIT_FAILURE);
+	    }
+               
+	    delta_t = (scte35_parse->next_pcr - scte35_parse->last_pcr) * (scte35_parse->cur_packet_num - scte35_parse->last_pcr_packet_num);	
+            delta_t /= (scte35_parse->next_pcr_packet_num - scte35_parse->last_pcr_packet_num);
+            scte35_parse->cur_pcr = (scte35_parse->last_pcr + delta_t) / 300;
+	    show_scte35_packet(w, scte35_parse);
+	    // have to free SCTE35ParseSection object since it was malloc'd
+	    free(scte35_parse);
+	    scte35_parse = NULL;
+
+	}
+        *packet_new = 0;
+    }
+
+    if (ret < 0)
+        return ret;
+    if (got_frame) {
+	ft_delta = 0;
+	SCTE35TimeStruct *ft_info = find(dict, fmt_ctx->cur_packet_num);
+	if (ft_info) {
+	    ft_delta = (ft_info->next_pcr_time - ft_info->last_pcr_time) * (ft_info->cur_packet_num - ft_info->last_pcr_packet_num);
+            ft_delta /= (ft_info->next_pcr_packet_num - ft_info->last_pcr_packet_num);
+	    frame_pcr = (ft_info->last_pcr_time + ft_delta) / 300;
+	} else {
+	    frame_pcr = -1;
+	}
+
+        int is_sub = (par->codec_type == AVMEDIA_TYPE_SUBTITLE);
+        nb_streams_frames[pkt->stream_index]++;
+        if (do_show_frames)
+            if (is_sub)
+                show_subtitle(w, &sub, ifile->streams[pkt->stream_index].st, fmt_ctx);
+            else
+                show_frame(w, frame, ifile->streams[pkt->stream_index].st, fmt_ctx, frame_pcr);
+        if (is_sub)
+            avsubtitle_free(&sub);
+    }
+    return got_frame || *packet_new;
+}
+
+static void log_read_interval(const ReadInterval *interval, void *log_ctx, int log_level)
+{
+    av_log(log_ctx, log_level, "id:%d", interval->id);
+
+    if (interval->has_start) {
+        av_log(log_ctx, log_level, " start:%s%s", interval->start_is_offset ? "+" : "",
+               av_ts2timestr(interval->start, &AV_TIME_BASE_Q));
+    } else {
+        av_log(log_ctx, log_level, " start:N/A");
+    }
+
+    if (interval->has_end) {
+        av_log(log_ctx, log_level, " end:%s", interval->end_is_offset ? "+" : "");
+        if (interval->duration_frames)
+            av_log(log_ctx, log_level, "#%"PRId64, interval->end);
+        else
+            av_log(log_ctx, log_level, "%s", av_ts2timestr(interval->end, &AV_TIME_BASE_Q));
+    } else {
+        av_log(log_ctx, log_level, " end:N/A");
+    }
+
+    av_log(log_ctx, log_level, "\n");
+}
+
 static int read_interval_packets(SCTE35Dictionary* dict, WriterContext *w, InputFile *ifile,
                                  const ReadInterval *interval, int64_t *cur_ts)
 {
@@ -2552,7 +2600,6 @@ static int read_interval_packets(SCTE35Dictionary* dict, WriterContext *w, Input
     int ret = 0, i = 0, frame_count = 0;
     int64_t start = -INT64_MAX, end = interval->end;
     int has_start = 0, has_end = interval->has_end && !interval->end_is_offset;
-    int64_t delta_t;
 
     av_init_packet(&pkt);
 
@@ -2603,45 +2650,6 @@ static int read_interval_packets(SCTE35Dictionary* dict, WriterContext *w, Input
         }
 
         if (selected_streams[pkt.stream_index]) {
-            AVCodecParameters *par = ifile->streams[pkt.stream_index].st->codecpar;
-	    // want to parse SCTE35 pkts when -show_frames is enabled
-	    if (par->codec_id == AV_CODEC_ID_SCTE_35 && do_read_frames) {
-		int ret_scte35 = 0;
-		delta_t = 0;
-
-		// SCTE35ParseSection is malloc'd to prevent memory overwriting
-		SCTE35ParseSection *scte35_parse = (SCTE35ParseSection*)malloc(sizeof(SCTE35ParseSection));
-		if (scte35_parse == NULL) {
-	            perror("Failed to malloc SCTE35ParseSection\n");
-		    exit(EXIT_FAILURE);
-		}
-		scte35_parse_init(scte35_parse);
-	        
-		SCTE35TimeStruct *time_info = find(dict, fmt_ctx->cur_packet_num);
-	        // these are set outside of parse_SCTE35 since they rely on SCTE35TimeStruct (from scan)	
-		scte35_parse->cur_packet_num = fmt_ctx->cur_packet_num;
-		scte35_parse->last_pcr_packet_num = time_info->last_pcr_packet_num;
-		scte35_parse->last_pcr = time_info->last_pcr_time;
-		scte35_parse->next_pcr = time_info->next_pcr_time;
-		scte35_parse->next_pcr_packet_num = time_info->next_pcr_packet_num;
-
-		// fill scte35_parse object based on data field in pkt
-		ret_scte35 = parse_SCTE35(&pkt, scte35_parse);
-		if (ret_scte35 != 0) {
-		    fprintf(stderr, "Issue when parsing SCTE35\n");
-		    exit(EXIT_FAILURE);
-		}
-               
-	        delta_t = (scte35_parse->next_pcr - scte35_parse->last_pcr) * (scte35_parse->cur_packet_num - scte35_parse->last_pcr_packet_num);	
-		delta_t /= (scte35_parse->next_pcr_packet_num - scte35_parse->last_pcr_packet_num);
-		scte35_parse->cur_pcr = (scte35_parse->last_pcr + delta_t) / 300;
-		show_scte35_packet(w, scte35_parse);
-		// have to free SCTE35ParseSection object since it was malloc'd
-		free(scte35_parse);
-		scte35_parse = NULL;
-
-	    }
-
             AVRational tb = ifile->streams[pkt.stream_index].st->time_base;
 
             if (pkt.pts != AV_NOPTS_VALUE)
@@ -2672,7 +2680,7 @@ static int read_interval_packets(SCTE35Dictionary* dict, WriterContext *w, Input
             }
             if (do_read_frames) {
                 int packet_new = 1;
-                while (process_frame(w, ifile, frame, &pkt, &packet_new) > 0);
+                while (process_frame(dict, w, ifile, frame, &pkt, &packet_new) > 0);
             }
         }
         av_packet_unref(&pkt);
@@ -2685,7 +2693,7 @@ static int read_interval_packets(SCTE35Dictionary* dict, WriterContext *w, Input
     for (i = 0; i < fmt_ctx->nb_streams; i++) {
         pkt.stream_index = i;
         if (do_read_frames)
-            while (process_frame(w, ifile, frame, &pkt, &(int){1}) > 0);
+            while (process_frame(dict, w, ifile, frame, &pkt, &(int){1}) > 0);
     }
 
 end:
@@ -3277,7 +3285,8 @@ static int scan_interval_packets(SCTE35Dictionary* dict, InputFile *ifile,
 		    SCTE35TimeStruct *cur_time = dequeue(&time_queue);
 		    cur_time->next_pcr_packet_num = fmt_ctx->last_pcr_packet_num;
 		    cur_time->next_pcr_time = fmt_ctx->last_pcr;
-		    insert(dict, cur_time->cur_packet_num, cur_time);		    
+		    insert(dict, cur_time->cur_packet_num, cur_time);
+                    free(cur_time);		    
 		}
 	    }
 	}	
@@ -3307,18 +3316,16 @@ static int scan_interval_packets(SCTE35Dictionary* dict, InputFile *ifile,
             }
 	    frame_count++;
 
-	    if (par->codec_id == AV_CODEC_ID_SCTE_35) {
-                SCTE35TimeStruct *scte35_time = (SCTE35TimeStruct*)malloc(sizeof(SCTE35TimeStruct));
-                if (scte35_time == NULL) {
-		    perror("Failed to malloc SCTE35TimeStruct\n");
-		    exit(EXIT_FAILURE);
-		}
-                scte35_time->cur_packet_num = fmt_ctx->cur_packet_num;
-                scte35_time->last_pcr_packet_num = fmt_ctx->last_pcr_packet_num;
-                scte35_time->last_pcr_time = fmt_ctx->last_pcr;
-
-                enqueue(&time_queue, scte35_time);		
+            SCTE35TimeStruct *scte35_time = (SCTE35TimeStruct*)malloc(sizeof(SCTE35TimeStruct));
+            if (scte35_time == NULL) {
+		perror("Failed to malloc SCTE35TimeStruct\n");
+		exit(EXIT_FAILURE);
 	    }
+            scte35_time->cur_packet_num = fmt_ctx->cur_packet_num;
+            scte35_time->last_pcr_packet_num = fmt_ctx->last_pcr_packet_num;
+            scte35_time->last_pcr_time = fmt_ctx->last_pcr;
+
+            enqueue(&time_queue, scte35_time);		
 
         }
 	av_packet_unref(&pkt);
