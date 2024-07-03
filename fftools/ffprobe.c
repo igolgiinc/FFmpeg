@@ -130,7 +130,7 @@ typedef struct ReadInterval {
     int duration_frames;
 } ReadInterval;
 
-#define NUM_BUCKETS 65537 
+#define NUM_BUCKETS 22303 
 
 static ReadInterval *read_intervals;
 static int read_intervals_nb = 0;
@@ -2641,6 +2641,46 @@ static int read_interval_packets(SCTE35Dictionary* dict, WriterContext *w, Input
     fmt_ctx->last_pcr_packet_num = 0;
     
     while (!av_read_frame(fmt_ctx, &pkt)) {
+	/*
+	 * struct SCTE35CommercialStruct {
+	 *     int search_IDR_flag;
+	 *     int in_commercial_flag;
+	 *     int duration_flag;
+	 *     int duration;
+	 *     int64_t scte35_pts;
+	 *     int64_t begin_commercial_pts;
+	 *     int64_t end_commercial_pts;
+	 * } SCTE35CommercialStruct;
+	 *
+	 * SCTE35CommercialStruct *commercial_struct = {0, 0, 0, 0, 0, 0}
+	 * 
+	 * // When a SCTE35 SpliceInsert OUT packet is found
+	 * commercial_struct->scte35_pts = scte35_parse...->pts;
+	 * // if SCTE35 SpliceInsert OUT packet has duration flag
+	 * commercial_struct->duration_flag = 1;
+	 * commercial_struct->duration = scte35_parse...->duration;
+         *
+	 * // When a frame is found to have a pts of greater than scte35_pts
+	 * commercial_struct->search_IDR_flag = 1;
+         * 
+	 * // during iteration, will now look for next video frame with keyframe = 1 
+	 * if (frame->key_frame) {
+	 *     commercial_struct->search_IDR_flag = 0;
+	 *     commercial_struct->in_commercial_flag = 1;
+	 *     commercial_struct->begin_commercial_pts = frame->pkt_pts;
+	 * }
+	 *
+	 * // within pts range of begin_commercial_pts + duration or while pts > begin_commercial_pts and search_IDR_flag == 0
+	 * Indicate frame is in commercial
+	 *
+	 * // Once out of pts range or SCTE35 SpliceInsert IN packet is found
+	 * search_IDR_flag = 1;
+	 *
+	 * // during iteration, will now look for next video frame with keyframe = 1
+	 * if (frame->key_frame) {
+	 *     reset_commercial_struct;
+	 * }
+	 */
 	packet_count++;
         if (fmt_ctx->nb_streams > nb_streams) {
             REALLOCZ_ARRAY_STREAM(nb_streams_frames,  nb_streams, fmt_ctx->nb_streams);
@@ -3292,7 +3332,6 @@ static int scan_interval_packets(SCTE35Dictionary* dict, InputFile *ifile,
 	}	
 
         if (selected_streams[pkt.stream_index]) {
-            AVCodecParameters *par = ifile->streams[pkt.stream_index].st->codecpar;
             AVRational tb = ifile->streams[pkt.stream_index].st->time_base;
 
             if (pkt.pts != AV_NOPTS_VALUE)

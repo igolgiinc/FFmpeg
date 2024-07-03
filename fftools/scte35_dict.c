@@ -10,11 +10,17 @@ SCTE35Dictionary* init_dictionary(size_t buckets, size_t valueSize) {
     new_dict->entries = (DictionaryEntry**)calloc(buckets, sizeof(DictionaryEntry*));
     new_dict->buckets = buckets;
     new_dict->valueSize = valueSize;
+    new_dict->count = 0;
 
     return new_dict;
 }
 
 void insert(SCTE35Dictionary* dict, int64_t key, void* value) {
+    dict->count++;
+    if (dict->count > dict->buckets * 0.75) {
+        resize_dict(dict);
+    }
+
     size_t hash_index;
     DictionaryEntry *cur_entry = (DictionaryEntry*)malloc(sizeof(DictionaryEntry));
     cur_entry->key = key;
@@ -60,6 +66,7 @@ void free_entry(SCTE35Dictionary* dict, int64_t key) {
         free(cur_entry);
 	cur_entry = NULL;
     }
+    dict->count--;
 }
 
 void free_dict(SCTE35Dictionary* dict) {
@@ -79,6 +86,27 @@ void free_dict(SCTE35Dictionary* dict) {
     dict->entries = NULL;
     free(dict);
     dict = NULL;
+}
+
+void resize_dict(SCTE35Dictionary* dict) {
+    int i;
+    size_t num_buckets = dict->buckets;
+    num_buckets *= 2;
+    DictionaryEntry **entries = (DictionaryEntry**)calloc(num_buckets, sizeof(DictionaryEntry*));
+    for (i = 0; i < dict->buckets; i++) {
+        DictionaryEntry *cur_entry = dict->entries[i];
+	while (cur_entry) {
+	    size_t new_hash = hash_function(cur_entry->key, num_buckets);
+	    DictionaryEntry *temp_entry = cur_entry->next;
+	    cur_entry->next = entries[new_hash];
+	    entries[new_hash] = cur_entry;
+            cur_entry = temp_entry;	    
+	}
+    }
+    free(dict->entries);
+    dict->entries = NULL;
+    dict->entries = entries;
+    dict->buckets = num_buckets;
 }
 
 
