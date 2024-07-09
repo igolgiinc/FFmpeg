@@ -2222,7 +2222,7 @@ static void show_frame(WriterContext *w, AVFrame *frame, AVStream *stream,
     s = av_get_media_type_string(stream->codecpar->codec_type);
     if (s) print_str    ("media_type", s);
     else   print_str_opt("media_type", "unknown");
-    print_int("packet_num",             fmt_ctx->cur_packet_num);
+    print_int("packet_num",             (fmt_ctx->parser_pos / 188) + 1);
     if (frame_pcr != -1) 
         print_int("PCR",                frame_pcr);
     print_int("stream_index",           stream->index);
@@ -2454,7 +2454,7 @@ static int parse_SCTE35(AVPacket *pkt, SCTE35ParseSection *scte35_ptr)
     return rc;
 }
 
-static av_always_inline int process_frame(SCTE35Dictionary *dict, WriterContext *w,
+static av_always_inline int process_frame(SCTE35Dictionary *dict, DynamicIntArray* arr, WriterContext *w,
                                           InputFile *ifile,
                                           AVFrame *frame, AVPacket *pkt,
                                           int *packet_new)
@@ -2468,6 +2468,9 @@ static av_always_inline int process_frame(SCTE35Dictionary *dict, WriterContext 
     int ft_delta;
     int ret_scte35;
     int64_t frame_pcr;
+    int64_t before, after;
+    int64_t parser_packet_num;
+    int64_t last_pcr_time, next_pcr_time;
 
     clear_log(1);
     if (dec_ctx && dec_ctx->codec) {
@@ -2514,13 +2517,13 @@ static av_always_inline int process_frame(SCTE35Dictionary *dict, WriterContext 
 	    }
 	    scte35_parse_init(scte35_parse);
 	        
-	    SCTE35TimeStruct *time_info = find(dict, fmt_ctx->cur_packet_num);
+	    getting_pcr_packet_nums(arr, fmt_ctx->cur_packet_num, &before, &after);
 	    // these are set outside of parse_SCTE35 since they rely on SCTE35TimeStruct (from scan)	
             scte35_parse->cur_packet_num = fmt_ctx->cur_packet_num;
-            scte35_parse->last_pcr_packet_num = time_info->last_pcr_packet_num;
-	    scte35_parse->last_pcr = time_info->last_pcr_time;
-	    scte35_parse->next_pcr = time_info->next_pcr_time;
-	    scte35_parse->next_pcr_packet_num = time_info->next_pcr_packet_num;
+            scte35_parse->last_pcr_packet_num = before;
+	    scte35_parse->last_pcr = *(int64_t*)find(dict, before);
+	    scte35_parse->next_pcr = *(int64_t*)find(dict, after);
+	    scte35_parse->next_pcr_packet_num = after;
 
 	    // fill scte35_parse object based on data field in pkt
 	    ret_scte35 = parse_SCTE35(pkt, scte35_parse);
@@ -2545,13 +2548,21 @@ static av_always_inline int process_frame(SCTE35Dictionary *dict, WriterContext 
         return ret;
     if (got_frame) {
 	ft_delta = 0;
-	SCTE35TimeStruct *ft_info = find(dict, fmt_ctx->cur_packet_num);
-	if (ft_info) {
-	    ft_delta = (ft_info->next_pcr_time - ft_info->last_pcr_time) * (ft_info->cur_packet_num - ft_info->last_pcr_packet_num);
-            ft_delta /= (ft_info->next_pcr_packet_num - ft_info->last_pcr_packet_num);
-	    frame_pcr = (ft_info->last_pcr_time + ft_delta) / 300;
+	parser_packet_num = (fmt_ctx->parser_pos / 188) + 1;
+	getting_pcr_packet_nums(arr, parser_packet_num, &before, &after);
+
+	if (before != after) {
+	    if (find(dict,after) && find(dict, before)) {
+	        next_pcr_time = *(int64_t*)find(dict, after);
+	        last_pcr_time = *(int64_t*)find(dict, before);
+	        ft_delta = (next_pcr_time - last_pcr_time) * (parser_packet_num - before);
+                ft_delta /= (after - before);
+	        frame_pcr = (last_pcr_time + ft_delta) / 300;
+	    } else {
+	        frame_pcr = -1;
+	    }
 	} else {
-	    frame_pcr = -1;
+	    frame_pcr = *(int64_t*)find(dict, after);
 	}
 
         int is_sub = (par->codec_type == AVMEDIA_TYPE_SUBTITLE);
@@ -2591,7 +2602,7 @@ static void log_read_interval(const ReadInterval *interval, void *log_ctx, int l
     av_log(log_ctx, log_level, "\n");
 }
 
-static int read_interval_packets(SCTE35Dictionary* dict, WriterContext *w, InputFile *ifile,
+static int read_interval_packets(SCTE35Dictionary* dict, DynamicIntArray* arr, WriterContext *w, InputFile *ifile,
                                  const ReadInterval *interval, int64_t *cur_ts)
 {
     AVFormatContext *fmt_ctx = ifile->fmt_ctx;
@@ -2720,7 +2731,7 @@ static int read_interval_packets(SCTE35Dictionary* dict, WriterContext *w, Input
             }
             if (do_read_frames) {
                 int packet_new = 1;
-                while (process_frame(dict, w, ifile, frame, &pkt, &packet_new) > 0);
+                while (process_frame(dict, arr, w, ifile, frame, &pkt, &packet_new) > 0);
             }
         }
         av_packet_unref(&pkt);
@@ -2733,7 +2744,7 @@ static int read_interval_packets(SCTE35Dictionary* dict, WriterContext *w, Input
     for (i = 0; i < fmt_ctx->nb_streams; i++) {
         pkt.stream_index = i;
         if (do_read_frames)
-            while (process_frame(dict, w, ifile, frame, &pkt, &(int){1}) > 0);
+            while (process_frame(dict, arr, w, ifile, frame, &pkt, &(int){1}) > 0);
     }
 
 end:
@@ -2745,7 +2756,7 @@ end:
     return ret;
 }
 
-static int read_packets(SCTE35Dictionary *dict, WriterContext *w, InputFile *ifile)
+static int read_packets(SCTE35Dictionary *dict, DynamicIntArray* arr, WriterContext *w, InputFile *ifile)
 {
     AVFormatContext *fmt_ctx = ifile->fmt_ctx;
     int i, ret = 0;
@@ -2753,10 +2764,10 @@ static int read_packets(SCTE35Dictionary *dict, WriterContext *w, InputFile *ifi
 
     if (read_intervals_nb == 0) {
         ReadInterval interval = (ReadInterval) { .has_start = 0, .has_end = 0 };
-        ret = read_interval_packets(dict, w, ifile, &interval, &cur_ts);
+        ret = read_interval_packets(dict, arr, w, ifile, &interval, &cur_ts);
     } else {
         for (i = 0; i < read_intervals_nb; i++) {
-            ret = read_interval_packets(dict, w, ifile, &read_intervals[i], &cur_ts);
+            ret = read_interval_packets(dict, arr, w, ifile, &read_intervals[i], &cur_ts);
             if (ret < 0)
                 break;
         }
@@ -3266,12 +3277,11 @@ static void close_input_file(InputFile *ifile)
     avformat_close_input(&ifile->fmt_ctx);
 }
 
-static int scan_interval_packets(SCTE35Dictionary* dict, InputFile *ifile, 
+static int scan_interval_packets(SCTE35Dictionary* dict, DynamicIntArray* arr, InputFile *ifile, 
 		                 const ReadInterval *interval, int64_t *cur_ts)
 {
     AVFormatContext *fmt_ctx = ifile->fmt_ctx;
     AVPacket pkt;
-    SCTE35Queue time_queue;
     int ret = 0, frame_count = 0;
     int64_t start = -INT64_MAX, end = interval->end;
     int has_start = 0, has_end = interval->has_end && !interval->end_is_offset;
@@ -3307,7 +3317,6 @@ static int scan_interval_packets(SCTE35Dictionary* dict, InputFile *ifile,
 
     fmt_ctx->cur_packet_num = 0;
     fmt_ctx->last_pcr_packet_num = 0;
-    create_queue(&time_queue);
 
     while (!av_read_frame(fmt_ctx, &pkt)) {
         if (fmt_ctx->nb_streams > nb_streams) {
@@ -3315,21 +3324,7 @@ static int scan_interval_packets(SCTE35Dictionary* dict, InputFile *ifile,
             REALLOCZ_ARRAY_STREAM(nb_streams_packets, nb_streams, fmt_ctx->nb_streams);
             REALLOCZ_ARRAY_STREAM(selected_streams,   nb_streams, fmt_ctx->nb_streams);
             nb_streams = fmt_ctx->nb_streams;
-        }
-
-        if (time_queue.size > 0) {
-	    SCTE35QueueElement *front_elem = front(&time_queue);
-	    SCTE35TimeStruct *front_time = front_elem->data;
-	    if (front_time->last_pcr_packet_num < fmt_ctx->last_pcr_packet_num) {
-                while (!(check_queue_empty(&time_queue))) {
-		    SCTE35TimeStruct *cur_time = dequeue(&time_queue);
-		    cur_time->next_pcr_packet_num = fmt_ctx->last_pcr_packet_num;
-		    cur_time->next_pcr_time = fmt_ctx->last_pcr;
-		    insert(dict, cur_time->cur_packet_num, cur_time);
-                    free(cur_time);		    
-		}
-	    }
-	}	
+        }	
 
         if (selected_streams[pkt.stream_index]) {
             AVRational tb = ifile->streams[pkt.stream_index].st->time_base;
@@ -3355,29 +3350,22 @@ static int scan_interval_packets(SCTE35Dictionary* dict, InputFile *ifile,
             }
 	    frame_count++;
 
-            SCTE35TimeStruct *scte35_time = (SCTE35TimeStruct*)malloc(sizeof(SCTE35TimeStruct));
-            if (scte35_time == NULL) {
-		perror("Failed to malloc SCTE35TimeStruct\n");
-		exit(EXIT_FAILURE);
-	    }
-            scte35_time->cur_packet_num = fmt_ctx->cur_packet_num;
-            scte35_time->last_pcr_packet_num = fmt_ctx->last_pcr_packet_num;
-            scte35_time->last_pcr_time = fmt_ctx->last_pcr;
-
-            enqueue(&time_queue, scte35_time);		
+	    // need to add section to update sorted array with fmt_ctx->last_pcr_packet_num
+            if (arr->cur_index == -1 || arr->values[arr->cur_index] != fmt_ctx->last_pcr_packet_num) {
+		array_insert(arr, fmt_ctx->last_pcr_packet_num);
+		insert(dict, fmt_ctx->last_pcr_packet_num, &fmt_ctx->last_pcr);
+	    }		
 
         }
 	av_packet_unref(&pkt);
 
     }
 
-    free_queue(&time_queue);
-
 end:
     return ret;
 }
 
-static int scan_packets(SCTE35Dictionary* dict, InputFile *ifile)
+static int scan_packets(SCTE35Dictionary* dict, DynamicIntArray* arr, InputFile *ifile)
 {
     AVFormatContext *fmt_ctx = ifile->fmt_ctx;
     int i, ret = 0;
@@ -3385,10 +3373,10 @@ static int scan_packets(SCTE35Dictionary* dict, InputFile *ifile)
 
     if (read_intervals_nb == 0) {
         ReadInterval interval = (ReadInterval) { .has_start = 0, .has_end = 0 };
-        ret = scan_interval_packets(dict, ifile, &interval, &cur_ts);
+        ret = scan_interval_packets(dict, arr, ifile, &interval, &cur_ts);
     } else {
         for (i = 0; i < read_intervals_nb; i++) {
-            ret = scan_interval_packets(dict, ifile, &read_intervals[i], &cur_ts);
+            ret = scan_interval_packets(dict, arr, ifile, &read_intervals[i], &cur_ts);
             if (ret < 0)
                 break;
         }
@@ -3398,7 +3386,7 @@ static int scan_packets(SCTE35Dictionary* dict, InputFile *ifile)
 
 }
 
-static int scan_file(SCTE35Dictionary* dict, const char *filename) 
+static int scan_file(SCTE35Dictionary* dict, DynamicIntArray* arr, const char *filename) 
 {
     InputFile ifile = { 0 };
     int ret, i;
@@ -3434,7 +3422,7 @@ static int scan_file(SCTE35Dictionary* dict, const char *filename)
     }
 
     if (do_read_frames || do_read_packets) {
-        ret = scan_packets(dict, &ifile);
+        ret = scan_packets(dict, arr, &ifile);
         CHECK_END;
     }
 
@@ -3448,7 +3436,7 @@ end:
     return ret;
 }
 
-static int probe_file(SCTE35Dictionary* dict, WriterContext *wctx, const char *filename)
+static int probe_file(SCTE35Dictionary* dict, DynamicIntArray* arr, WriterContext *wctx, const char *filename)
 {
     InputFile ifile = { 0 };
     int ret, i;
@@ -3494,7 +3482,7 @@ static int probe_file(SCTE35Dictionary* dict, WriterContext *wctx, const char *f
             section_id = SECTION_ID_FRAMES;
         if (do_show_frames || do_show_packets)
             writer_print_section_header(wctx, section_id);
-        ret = read_packets(dict, wctx, &ifile);
+        ret = read_packets(dict, arr, wctx, &ifile);
         if (do_show_frames || do_show_packets)
             writer_print_section_footer(wctx);
         CHECK_END;
@@ -4169,11 +4157,14 @@ int main(int argc, char **argv)
             av_log(NULL, AV_LOG_ERROR, "Use -h to get full help or, even better, run 'man %s'.\n", program_name);
             ret = AVERROR(EINVAL);
         } else if (input_filename) {
-	    SCTE35Dictionary *dict = init_dictionary(NUM_BUCKETS, sizeof(SCTE35TimeStruct));
-	    scan_file(dict, input_filename);
-            ret = probe_file(dict, wctx, input_filename);
+	    SCTE35Dictionary *dict = init_dictionary(NUM_BUCKETS, sizeof(int64_t));
+	    DynamicIntArray *arr = init_array(NUM_BUCKETS);
+	    scan_file(dict, arr, input_filename);
+            ret = probe_file(dict, arr, wctx, input_filename);
 	    free_dict(dict);
 	    dict = NULL;
+	    free_array(arr);
+	    arr = NULL;
             if (ret < 0 && do_show_error)
                 show_error(wctx, ret);
         }

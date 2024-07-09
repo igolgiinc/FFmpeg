@@ -109,4 +109,56 @@ void resize_dict(SCTE35Dictionary* dict) {
     dict->buckets = num_buckets;
 }
 
+DynamicIntArray* init_array(size_t capacity) {
+    DynamicIntArray* arr = (DynamicIntArray*)malloc(sizeof(DynamicIntArray));
+    arr->values = (int64_t*)malloc(sizeof(int64_t) * capacity);
+    arr->cur_index = -1;
+    arr->cur_capacity = capacity;
+
+    return arr;
+}
+
+void resize_array(DynamicIntArray* arr) {
+    arr->cur_capacity *= 2;
+    arr->values = (int64_t*)realloc(arr->values, sizeof(int64_t) * arr->cur_capacity);
+}
+
+void array_insert(DynamicIntArray* arr, int64_t value) {
+    int64_t next_index = arr->cur_index + 1;
+    if (next_index >= arr->cur_capacity)
+        resize_array(arr);
+    
+    arr->values[next_index] = value;
+    arr->cur_index = next_index;
+}
+
+void free_array(DynamicIntArray* arr) {
+    free(arr->values);
+    free(arr);
+}
+
+void getting_pcr_packet_nums(DynamicIntArray* arr, int64_t target, int64_t* before, int64_t* after) {
+    int64_t l, r, mid;
+    l = 0;
+    r = arr->cur_index;
+
+    if (arr->cur_index != -1) {
+        while (l <= r) {
+            mid = (l + r) / 2;
+	    int64_t mid_value = arr->values[mid];
+	    if (mid_value < target) {
+	        *before = mid_value;
+		l = mid + 1;
+	    } else if (mid_value > target) {
+	        *after = mid_value;
+		r = mid - 1;
+	    } else {
+		*before = mid_value;
+		*after = mid_value;
+		break;
+            }
+	}
+    }
+
+}
 

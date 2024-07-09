@@ -1113,6 +1113,7 @@ static int mpegts_push_data(MpegTSFilter *filter,
     MpegTSContext *ts = pes->ts;
     const uint8_t *p;
     int ret, len, code;
+    //int pes_payload_flag = 0;
 
     if (!ts->pkt)
         return 0;
@@ -1123,12 +1124,14 @@ static int mpegts_push_data(MpegTSFilter *filter,
             if (ret < 0)
                 return ret;
             ts->stop_parse = 1;
+//	    pes_payload_flag = 1; 
         } else {
             reset_pes_packet_state(pes);
         }
         pes->state         = MPEGTS_HEADER;
         pes->ts_packet_pos = pos;
     }
+
     p = buf;
     while (buf_size > 0) {
         switch (pes->state) {
@@ -1375,8 +1378,17 @@ skip:
                     if (ret < 0)
                         return ret;
                 }
+	        /*	
+		if (pes_payload_flag) {
+		    ret = new_pes_packet(pes, ts->pkt);
+                    if (ret < 0)
+                        return ret;
+                    ts->stop_parse = 1;
+		    pes_payload_flag = 0;
+		}*/
             }
             buf_size = 0;
+            
             break;
         case MPEGTS_SKIP:
             buf_size = 0;
