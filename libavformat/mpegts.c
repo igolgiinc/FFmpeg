@@ -171,7 +171,7 @@ struct MpegTSContext {
     int current_pid;
 
     int64_t cur_packet_num;
-    int64_t last_pcr_packet_num;
+    AVIOQueue* last_pcr_queue;
 };
 
 #define MPEGTS_OPTIONS \
@@ -2656,8 +2656,11 @@ static int handle_packet(MpegTSContext *ts, const uint8_t *packet)
         int pcr_l;
         if (parse_pcr(&pcr_h, &pcr_l, packet) == 0) {
             tss->last_pcr = pcr_h * 300 + pcr_l;
-	    ts->last_pcr = tss->last_pcr;
-	    ts->last_pcr_packet_num = ts->cur_packet_num;
+            PCRTiming* cur_pcr_timing = (PCRTiming*)malloc(sizeof(PCRTiming));
+	    cur_pcr_timing->pcr_packet_num = ts->cur_packet_num;
+	    cur_pcr_timing->pcr_time = tss->last_pcr;
+
+	    enqueue(ts->last_pcr_queue, cur_pcr_timing);
 	}
         /* skip adaptation field */
         p += p[0] + 1;
@@ -3124,14 +3127,11 @@ static int mpegts_read_packet(AVFormatContext *s, AVPacket *pkt)
     int ret, i;
 
     ts->cur_packet_num = s->cur_packet_num;
-    ts->last_pcr_packet_num = s->last_pcr_packet_num;
-    ts->last_pcr = s->last_pcr;
+    ts->last_pcr_queue = s->last_pcr_queue;
     pkt->size = -1;
     ts->pkt = pkt;
     ret = handle_packets(ts, 0);
     s->cur_packet_num = ts->cur_packet_num;
-    s->last_pcr_packet_num = ts->last_pcr_packet_num; 
-    s->last_pcr = ts->last_pcr;
 
     if (ret < 0) {
         av_packet_unref(ts->pkt);

@@ -858,4 +858,28 @@ int avio_accept(AVIOContext *s, AVIOContext **c);
  *           < 0 for an AVERROR code
  */
 int avio_handshake(AVIOContext *c);
+
+typedef struct PCRTiming {
+    int64_t pcr_packet_num;
+    int64_t pcr_time;
+} PCRTiming;
+
+typedef struct AVIOQueueElement {
+    void *data;
+    struct AVIOQueueElement *next;
+} AVIOQueueElement;
+
+typedef struct AVIOQueue {
+    AVIOQueueElement *front;
+    AVIOQueueElement *back;
+    int size;
+} AVIOQueue;
+
+void create_queue(AVIOQueue* q);
+int check_queue_empty(AVIOQueue *q);
+void free_queue(AVIOQueue *q);
+void enqueue(AVIOQueue *q, void *data);
+void* dequeue(AVIOQueue *q);
+AVIOQueueElement* front(AVIOQueue *q);
+
 #endif /* AVFORMAT_AVIO_H */

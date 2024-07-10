@@ -1952,10 +1952,9 @@ typedef struct AVFormatContext {
      */
     int skip_estimate_duration_from_pts;
 
-    uint64_t cur_packet_num;
-    uint64_t last_pcr_packet_num;
-    int64_t last_pcr;
+    int64_t cur_packet_num;
     int64_t parser_pos;
+    AVIOQueue *last_pcr_queue;
 
 } AVFormatContext;
 

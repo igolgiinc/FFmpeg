@@ -193,36 +193,6 @@ typedef struct SCTE35ParseSection
     uint32_t crc;
 } SCTE35ParseSection;
 
-// represents parsed contents of SCTE35 packet in queue
-typedef struct SCTE35QueueElement 
-{
-    void *data;
-    struct SCTE35QueueElement *next;
-} SCTE35QueueElement;
-
-// stores parsed contents of SCTE35 packets
-typedef struct SCTE35Queue 
-{
-    SCTE35QueueElement *front;
-    SCTE35QueueElement *back;
-    int size;
-} SCTE35Queue;
-
-void create_queue(SCTE35Queue* q);
-int check_queue_empty(SCTE35Queue *q);
-void free_queue(SCTE35Queue *q);
-void enqueue(SCTE35Queue *q, void *data);
-void* dequeue(SCTE35Queue *q);
-SCTE35QueueElement* front(SCTE35Queue *q);
-
-typedef struct SCTE35TimeStruct {
-    int64_t last_pcr_time;
-    int64_t last_pcr_packet_num;
-    int64_t cur_packet_num;
-    int64_t next_pcr_time;
-    int64_t next_pcr_packet_num;
-} SCTE35TimeStruct;
-
 void scte35_parse_init(SCTE35ParseSection *scte35_ptr);
 int parse_insert(unsigned char *cmd, unsigned char *table, SCTE35ParseSection *scte35_ptr);
 int parse_splice_descriptor(unsigned char *field, unsigned char *table, SCTE35SpliceDesc *splice_desc);

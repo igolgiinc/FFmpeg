@@ -667,3 +667,78 @@ int ff_check_interrupt(AVIOInterruptCB *cb)
         return cb->callback(cb->opaque);
     return 0;
 }
+
+// initializes queue
+void create_queue(AVIOQueue* q) 
+{
+    q->front = NULL;
+    q->back = NULL;
+    q->size = 0;
+}
+
+// returns one if queue is empty
+int check_queue_empty(AVIOQueue* q) 
+{
+    return q->size == 0;
+}
+
+// Adds entry to queue
+void enqueue(AVIOQueue* q, void* data) 
+{
+    AVIOQueueElement* newElement = (AVIOQueueElement*)malloc(sizeof(AVIOQueueElement));
+    if (newElement == NULL) {
+        perror("Failed to allocate memory");
+        exit(EXIT_FAILURE);
+    }
+
+    newElement->data = data;
+    newElement->next = NULL;
+    if (check_queue_empty(q)) {
+        q->front = newElement;
+        q->back = newElement;
+    } else {
+        q->back->next = newElement;
+        q->back = newElement;
+    }
+    q->size++;
+}
+
+// frees all entries in queue
+void free_queue(AVIOQueue *q) 
+{
+    while (!(check_queue_empty(q))) {
+        void *data = dequeue(q);
+	free(data);
+        data = NULL;
+    }
+}
+
+// removes and returns first element of queue
+void* dequeue(AVIOQueue* q) 
+{
+    AVIOQueueElement *temp;
+    void *data;
+    if (check_queue_empty(q)) {
+        fprintf(stderr, "Queue is empty\n");
+        exit(EXIT_FAILURE);
+    }
+    temp = q->front;
+    data = temp->data;
+    q->front = q->front->next;
+    if (q->front == NULL)
+        q->back = NULL;
+    free(temp);
+    temp = NULL;
+    q->size--;
+    return data;    
+}
+
+// return front of SCTE35 queue
+AVIOQueueElement* front(AVIOQueue* q) 
+{
+    if (check_queue_empty(q)) {
+        fprintf(stderr, "Queue is empty\n");
+        exit(EXIT_FAILURE);
+    }
+    return q->front;
+}
