@@ -157,7 +157,7 @@ AVFormatContext *avformat_alloc_context(void)
     ic->internal->raw_packet_buffer_remaining_size = RAW_PACKET_BUFFER_SIZE;
     ic->internal->shortest_end = AV_NOPTS_VALUE;
 
-    ic->last_pcr_queue = (AVIOQueue*)malloc(sizeof(AVIOQueue*));
+    ic->last_pcr_queue = (AVIOQueue*)malloc(sizeof(AVIOQueue));
     create_queue(ic->last_pcr_queue);
 
     return ic;

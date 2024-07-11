@@ -2282,6 +2282,10 @@ static void show_frame(WriterContext *w, AVFrame *frame, AVStream *stream,
         print_primaries(w, frame->color_primaries);
         print_color_trc(w, frame->color_trc);
         print_chroma_location(w, frame->chroma_location);
+
+        if (av_get_picture_type_char(frame->pict_type) == 'I' && frame->key_frame)
+	    printf("\n<======= IDR SYNC POINT ==============>");
+
         break;
 
     case AVMEDIA_TYPE_AUDIO:
@@ -2303,7 +2307,8 @@ static void show_frame(WriterContext *w, AVFrame *frame, AVStream *stream,
         show_tags(w, frame->metadata, SECTION_ID_FRAME_TAGS);
     if (do_show_log)
         show_log(w, SECTION_ID_FRAME_LOGS, SECTION_ID_FRAME_LOG, do_show_log);
-    if (frame->nb_side_data) {
+   
+    if (frame->nb_side_data && !strcmp(print_format, "json")) {
         writer_print_section_header(w, SECTION_ID_FRAME_SIDE_DATA_LIST);
         for (i = 0; i < frame->nb_side_data; i++) {
             AVFrameSideData *sd = frame->side_data[i];
@@ -2351,6 +2356,8 @@ static void show_frame(WriterContext *w, AVFrame *frame, AVStream *stream,
             writer_print_section_footer(w);
         }
         writer_print_section_footer(w);
+    } else {
+        printf("\n");
     }
 
     writer_print_section_footer(w);
@@ -2478,8 +2485,8 @@ static av_always_inline int process_frame(SCTE35Dictionary *dict, DynamicIntArra
     AVCodecParameters *par = ifile->streams[pkt->stream_index].st->codecpar;
     AVSubtitle sub;
     int ret = 0, got_frame = 0;
-    int delta_t;
-    int ft_delta;
+    int64_t delta_t;
+    int64_t ft_delta;
     int ret_scte35;
     int64_t frame_pcr;
     int64_t before, after;
@@ -2568,14 +2575,22 @@ static av_always_inline int process_frame(SCTE35Dictionary *dict, DynamicIntArra
 	getting_pcr_packet_nums(arr, parser_packet_num, &before, &after);
 
 	if (before != after) {
-	    if (find(dict,after) && find(dict, before)) {
-	        next_pcr_time = *(int64_t*)find(dict, after);
-	        last_pcr_time = *(int64_t*)find(dict, before);
+	    if (find(dict, before)) {
+		if (find(dict, after)) {
+	            next_pcr_time = *(int64_t*)find(dict, after);
+	            last_pcr_time = *(int64_t*)find(dict, before);
+		} else {
+		    next_pcr_time = *(int64_t*)find(dict, arr->values[arr->cur_index]);
+	            last_pcr_time = *(int64_t*)find(dict, arr->values[0]);
+	            before = arr->values[0];	    
+		    after = arr->values[arr->cur_index];  
+		}
 	        ft_delta = (next_pcr_time - last_pcr_time) * (parser_packet_num - before);
                 ft_delta /= (after - before);
+		
 	        frame_pcr = (last_pcr_time + ft_delta) / 300;
 	    } else {
-	        frame_pcr = -1;
+                frame_pcr = -1;
 	    }
 	} else {
 	    frame_pcr = *(int64_t*)find(dict, after) / 300;
@@ -2633,6 +2648,10 @@ static int read_interval_packets(SCTE35Dictionary* dict, DynamicIntArray* arr, W
     av_log(NULL, AV_LOG_VERBOSE, "Processing read interval ");
     log_read_interval(interval, NULL, AV_LOG_VERBOSE);
 
+    // used for calculating SCTE35 packet pcr
+    fmt_ctx->cur_packet_num = 0;
+    free_queue(fmt_ctx->last_pcr_queue);
+    
     if (interval->has_start) {
         int64_t target;
         if (interval->start_is_offset) {
@@ -2661,10 +2680,7 @@ static int read_interval_packets(SCTE35Dictionary* dict, DynamicIntArray* arr, W
     if (!frame) {
         ret = AVERROR(ENOMEM);
         goto end;
-    }
-
-    // used for calculating SCTE35 packet pcr
-    fmt_ctx->cur_packet_num = 0;
+    } 
     
     while (!av_read_frame(fmt_ctx, &pkt)) {
 	/*
@@ -2690,7 +2706,7 @@ static int read_interval_packets(SCTE35Dictionary* dict, DynamicIntArray* arr, W
 	 * commercial_struct->search_IDR_flag = 1;
          * 
 	 * // during iteration, will now look for next video frame with keyframe = 1 
-	 * if (frame->key_frame) {
+	 * if (frame->key_fram) {
 	 *     commercial_struct->search_IDR_flag = 0;
 	 *     commercial_struct->in_commercial_flag = 1;
 	 *     commercial_struct->begin_commercial_pts = frame->pkt_pts;
@@ -2763,7 +2779,9 @@ static int read_interval_packets(SCTE35Dictionary* dict, DynamicIntArray* arr, W
     }
 
 end:
-    av_frame_free(&frame);
+    av_frame_free(&frame); 
+    free_queue(fmt_ctx->last_pcr_queue);
+    free(fmt_ctx->last_pcr_queue);
     if (ret < 0) {
         av_log(NULL, AV_LOG_ERROR, "Could not read packets in interval ");
         log_read_interval(interval, NULL, AV_LOG_ERROR);
@@ -3305,7 +3323,7 @@ static int scan_interval_packets(SCTE35Dictionary* dict, DynamicIntArray* arr, I
     av_init_packet(&pkt);
 
     av_log(NULL, AV_LOG_VERBOSE, "Processing read interval ");
-    log_read_interval(interval, NULL, AV_LOG_VERBOSE);
+    //log_read_interval(interval, NULL, AV_LOG_VERBOSE);
 
     fmt_ctx->cur_packet_num = 0;
 
@@ -3327,7 +3345,7 @@ static int scan_interval_packets(SCTE35Dictionary* dict, DynamicIntArray* arr, I
         }
 
         av_log(NULL, AV_LOG_VERBOSE, "Seeking to read interval start point %s\n",
-               av_ts2timestr(target, &AV_TIME_BASE_Q));
+            av_ts2timestr(target, &AV_TIME_BASE_Q));
         if ((ret = avformat_seek_file(fmt_ctx, -1, -INT64_MAX, target, INT64_MAX, 0)) < 0) {
             av_log(NULL, AV_LOG_ERROR, "Could not seek to position %"PRId64": %s\n",
                    interval->start, av_err2str(ret));
@@ -3376,7 +3394,8 @@ static int scan_interval_packets(SCTE35Dictionary* dict, DynamicIntArray* arr, I
 		        array_insert(arr, last_pcr_packet_num);
 		        insert(dict, last_pcr_packet_num, &last_pcr);
 		    }
-	        }		
+	        }
+		free(cur_pcr_timing);		
 
             }
 	    av_packet_unref(&pkt);

@@ -198,4 +198,17 @@ int parse_insert(unsigned char *cmd, unsigned char *table, SCTE35ParseSection *s
 int parse_splice_descriptor(unsigned char *field, unsigned char *table, SCTE35SpliceDesc *splice_desc);
 int parse_time_signal(unsigned char *cmd, unsigned char *table, SCTE35ParseSection *scte35_ptr);
 
+typedef struct SCTE35CommercialStruct 
+{
+    int search_IDR_flag;
+    int in_commercial_flag;
+    int auto_return_flag;
+    int duration_flag;
+    int duration;
+    int64_t scte35_begin_commercial_pts;
+    int64_t scte35_end_commercial_pts;
+    int64_t begin_commercial_pts;
+} SCTE35CommercialStruct;
+
+
 #endif
