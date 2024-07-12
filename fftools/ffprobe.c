@@ -2183,12 +2183,12 @@ static void show_scte35_packet(WriterContext *w, SCTE35ParseSection *scte35_ptr)
 	if (splice_command_type == SCTE35_CMD_INSERT) {
 	    print_ts("SCTE35_pts_time", scte35_ptr->cmd.insert.time.pts_time);
 	    if (scte35_ptr->cmd.insert.out_of_network_indicator) {
-		print_str("SCTE35_in_out", "OUT");
 	        print_int("SCTE35_auto_return", scte35_ptr->cmd.insert.break_duration.auto_return);
 		if (scte35_ptr->cmd.insert.duration_flag) 	
 	            print_int("SCTE35_duration", scte35_ptr->cmd.insert.break_duration.duration);
+                print_str("SCTE35_in_out_network", "OUT");
 	    } else {
-	        print_str("SCTE35_in_out", "IN");
+	        print_str("SCTE35_in_out_network", "IN");
 	    }
 	} else {
             print_ts("SCTE35_pts_time", scte35_ptr->cmd.time_signal.time.pts_time);
@@ -2219,7 +2219,7 @@ static void show_scte35_packet(WriterContext *w, SCTE35ParseSection *scte35_ptr)
 }
 
 static void show_frame(WriterContext *w, AVFrame *frame, AVStream *stream,
-                       AVFormatContext *fmt_ctx, int64_t frame_pcr, int64_t parser_packet_num)
+                       AVFormatContext *fmt_ctx, int64_t frame_pcr, int64_t parser_packet_num, SCTE35CommercialStruct* com)
 {
     AVBPrint pbuf;
     char val_str[128];
@@ -2255,6 +2255,9 @@ static void show_frame(WriterContext *w, AVFrame *frame, AVStream *stream,
     if (frame->pkt_size != -1) print_val    ("pkt_size", frame->pkt_size, unit_byte_str);
     else                       print_str_opt("pkt_size", "N/A");
 
+    if (com->in_commercial_flag && com->duration_flag && frame->pts > com->begin_commercial_pts) 
+        print_int("SCTE35_REMAINING", com->duration - (frame->pts - com->begin_commercial_pts));
+
     switch (stream->codecpar->codec_type) {
         AVRational sar;
 
@@ -2283,8 +2286,14 @@ static void show_frame(WriterContext *w, AVFrame *frame, AVStream *stream,
         print_color_trc(w, frame->color_trc);
         print_chroma_location(w, frame->chroma_location);
 
-        if (av_get_picture_type_char(frame->pict_type) == 'I' && frame->key_frame)
-	    printf("\n<======= IDR SYNC POINT ==============>");
+	if (strcmp(print_format, "json")) {
+            if (av_get_picture_type_char(frame->pict_type) == 'I' && frame->key_frame) 
+	        printf(" <==== IDR SYNC POINT ====>");
+            if (com->begin_commercial_pts == frame->pts) 
+	        printf(" <==== SCTE35 SPLICE POINT, CUE-OUT ====>");
+	    if (com->end_commercial_pts == frame->pts) 
+		printf(" <==== SCTE35 SPLICE POINT, CUE-IN ====>");
+        }	
 
         break;
 
@@ -2303,6 +2312,7 @@ static void show_frame(WriterContext *w, AVFrame *frame, AVStream *stream,
             print_str_opt("channel_layout", "unknown");
         break;
     }
+
     if (do_show_frame_tags)
         show_tags(w, frame->metadata, SECTION_ID_FRAME_TAGS);
     if (do_show_log)
@@ -2475,7 +2485,7 @@ static int parse_SCTE35(AVPacket *pkt, SCTE35ParseSection *scte35_ptr)
     return rc;
 }
 
-static av_always_inline int process_frame(SCTE35Dictionary *dict, DynamicIntArray* arr, WriterContext *w,
+static av_always_inline int process_frame(SCTE35Dictionary *dict, DynamicIntArray* arr, SCTE35CommercialStruct *com, WriterContext *w,
                                           InputFile *ifile,
                                           AVFrame *frame, AVPacket *pkt,
                                           int *packet_new)
@@ -2551,7 +2561,25 @@ static av_always_inline int process_frame(SCTE35Dictionary *dict, DynamicIntArra
 	        fprintf(stderr, "Issue when parsing SCTE35\n");
 		exit(EXIT_FAILURE);
 	    }
-               
+
+	    if (scte35_parse->splice_command_type == SCTE35_CMD_INSERT) {
+		if (scte35_parse->cmd.insert.out_of_network_indicator) {
+	            com->search_out_IDR_flag = 1;
+	            if (scte35_parse->cmd.insert.duration_flag) { 
+	                com->duration = scte35_parse->cmd.insert.break_duration.duration;
+			com->duration_flag = 1;
+	                if (scte35_parse->cmd.insert.break_duration.auto_return) 	
+                            com->auto_return_flag = 1;
+		    }
+                    com->scte35_begin_commercial_pts = scte35_parse->cmd.insert.time.pts_time;
+		} else {
+		    if (com->in_commercial_flag) {
+		        com->search_in_IDR_flag = 1;
+			com->expected_end_commercial_pts = scte35_parse->cmd.insert.time.pts_time;
+		    }
+		}
+	    }
+
 	    delta_t = (scte35_parse->next_pcr - scte35_parse->last_pcr) * (scte35_parse->cur_packet_num - scte35_parse->last_pcr_packet_num);	
             delta_t /= (scte35_parse->next_pcr_packet_num - scte35_parse->last_pcr_packet_num);
             scte35_parse->cur_pcr = (scte35_parse->last_pcr + delta_t) / 300;
@@ -2594,6 +2622,27 @@ static av_always_inline int process_frame(SCTE35Dictionary *dict, DynamicIntArra
 	    }
 	} else {
 	    frame_pcr = *(int64_t*)find(dict, after) / 300;
+        }
+
+	if (com->search_out_IDR_flag) {
+	    if (av_get_picture_type_char(frame->pict_type) == 'I' && frame->key_frame && frame->pts > com->scte35_begin_commercial_pts) {
+	        com->search_out_IDR_flag = 0;
+		com->in_commercial_flag = 1;
+		com->begin_commercial_pts = frame->pts;
+		if (com->auto_return_flag)
+		    com->expected_end_commercial_pts = com->begin_commercial_pts + com->duration;
+	    }
+	}
+
+        if (com->in_commercial_flag && com->auto_return_flag && frame->pts > com->expected_end_commercial_pts) 
+	    com->search_in_IDR_flag = 1;
+
+	if (com->search_in_IDR_flag) {
+	    if (av_get_picture_type_char(frame->pict_type) == 'I' && frame->key_frame && frame->pts > com->expected_end_commercial_pts) {
+	        com->search_in_IDR_flag = 0;
+		com->in_commercial_flag = 0;
+		com->end_commercial_pts = frame->pts;
+	    } 
 	}
 
         int is_sub = (par->codec_type == AVMEDIA_TYPE_SUBTITLE);
@@ -2602,7 +2651,7 @@ static av_always_inline int process_frame(SCTE35Dictionary *dict, DynamicIntArra
             if (is_sub)
                 show_subtitle(w, &sub, ifile->streams[pkt->stream_index].st, fmt_ctx);
             else
-                show_frame(w, frame, ifile->streams[pkt->stream_index].st, fmt_ctx, frame_pcr, parser_packet_num);
+                show_frame(w, frame, ifile->streams[pkt->stream_index].st, fmt_ctx, frame_pcr, parser_packet_num, com);
         if (is_sub)
             avsubtitle_free(&sub);
     }
@@ -2681,7 +2730,9 @@ static int read_interval_packets(SCTE35Dictionary* dict, DynamicIntArray* arr, W
         ret = AVERROR(ENOMEM);
         goto end;
     } 
-    
+   
+    SCTE35CommercialStruct com = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+
     while (!av_read_frame(fmt_ctx, &pkt)) {
 	/*
 	 * struct SCTE35CommercialStruct {
@@ -2693,8 +2744,6 @@ static int read_interval_packets(SCTE35Dictionary* dict, DynamicIntArray* arr, W
 	 *     int64_t begin_commercial_pts;
 	 *     int64_t end_commercial_pts;
 	 * } SCTE35CommercialStruct;
-	 *
-	 * SCTE35CommercialStruct *commercial_struct = {0, 0, 0, 0, 0, 0}
 	 * 
 	 * // When a SCTE35 SpliceInsert OUT packet is found
 	 * commercial_struct->scte35_pts = scte35_parse...->pts;
@@ -2762,7 +2811,7 @@ static int read_interval_packets(SCTE35Dictionary* dict, DynamicIntArray* arr, W
             }
             if (do_read_frames) {
                 int packet_new = 1;
-                while (process_frame(dict, arr, w, ifile, frame, &pkt, &packet_new) > 0);
+                while (process_frame(dict, arr, &com, w, ifile, frame, &pkt, &packet_new) > 0);
             }
         }
         av_packet_unref(&pkt);
@@ -2775,7 +2824,7 @@ static int read_interval_packets(SCTE35Dictionary* dict, DynamicIntArray* arr, W
     for (i = 0; i < fmt_ctx->nb_streams; i++) {
         pkt.stream_index = i;
         if (do_read_frames)
-            while (process_frame(dict, arr, w, ifile, frame, &pkt, &(int){1}) > 0);
+            while (process_frame(dict, arr, &com, w, ifile, frame, &pkt, &(int){1}) > 0);
     }
 
 end:
@@ -3175,6 +3224,125 @@ static void show_error(WriterContext *w, int err)
     writer_print_section_footer(w);
 }
 
+static int open_input_file_no_print(InputFile *ifile, const char *filename) 
+{
+    int err, i;
+    AVFormatContext *fmt_ctx = NULL;
+    AVDictionaryEntry *t;
+    int scan_all_pmts_set = 0;
+
+    fmt_ctx = avformat_alloc_context();
+    if (!fmt_ctx) {
+        print_error(filename, AVERROR(ENOMEM));
+        exit_program(1);
+    }
+
+    if (!av_dict_get(format_opts, "scan_all_pmts", NULL, AV_DICT_MATCH_CASE)) {
+        av_dict_set(&format_opts, "scan_all_pmts", "1", AV_DICT_DONT_OVERWRITE);
+        scan_all_pmts_set = 1;
+    }
+    if ((err = avformat_open_input(&fmt_ctx, filename,
+                                   iformat, &format_opts)) < 0) {
+        print_error(filename, err);
+        return err;
+    }
+    ifile->fmt_ctx = fmt_ctx;
+    if (scan_all_pmts_set)
+        av_dict_set(&format_opts, "scan_all_pmts", NULL, AV_DICT_MATCH_CASE);
+    if ((t = av_dict_get(format_opts, "", NULL, AV_DICT_IGNORE_SUFFIX))) {
+        av_log(NULL, AV_LOG_ERROR, "Option %s not found.\n", t->key);
+        return AVERROR_OPTION_NOT_FOUND;
+    }
+
+    if (find_stream_info) {
+        AVDictionary **opts = setup_find_stream_info_opts(fmt_ctx, codec_opts);
+        int orig_nb_streams = fmt_ctx->nb_streams;
+
+        err = avformat_find_stream_info(fmt_ctx, opts);
+
+        for (i = 0; i < orig_nb_streams; i++)
+            av_dict_free(&opts[i]);
+        av_freep(&opts);
+
+        if (err < 0) {
+            print_error(filename, err);
+            return err;
+        }
+    }
+
+    ifile->streams = av_mallocz_array(fmt_ctx->nb_streams,
+                                      sizeof(*ifile->streams));
+    if (!ifile->streams)
+        exit(1);
+    ifile->nb_streams = fmt_ctx->nb_streams;
+
+    /* bind a decoder to each input stream */
+    for (i = 0; i < fmt_ctx->nb_streams; i++) {
+        InputStream *ist = &ifile->streams[i];
+        AVStream *stream = fmt_ctx->streams[i];
+        AVCodec *codec;
+
+        ist->st = stream;
+
+        if (stream->codecpar->codec_id == AV_CODEC_ID_PROBE) {
+            av_log(NULL, AV_LOG_WARNING,
+                   "Failed to probe codec for input stream %d\n",
+                    stream->index);
+            continue;
+        }
+
+        codec = avcodec_find_decoder(stream->codecpar->codec_id);
+        if (!codec) {
+            av_log(NULL, AV_LOG_WARNING,
+                    "Unsupported codec with id %d for input stream %d\n",
+                    stream->codecpar->codec_id, stream->index);
+            continue;
+        }
+        {
+            AVDictionary *opts = filter_codec_opts(codec_opts, stream->codecpar->codec_id,
+                                                   fmt_ctx, stream, codec);
+
+            ist->dec_ctx = avcodec_alloc_context3(codec);
+            if (!ist->dec_ctx)
+                exit(1);
+
+            err = avcodec_parameters_to_context(ist->dec_ctx, stream->codecpar);
+            if (err < 0)
+                exit(1);
+
+            if (do_show_log) {
+                // For loging it is needed to disable at least frame threads as otherwise
+                // the log information would need to be reordered and matches up to contexts and frames
+                // That is in fact possible but not trivial
+                av_dict_set(&codec_opts, "threads", "1", 0);
+            }
+
+            ist->dec_ctx->pkt_timebase = stream->time_base;
+            ist->dec_ctx->framerate = stream->avg_frame_rate;
+#if FF_API_LAVF_AVCTX
+            ist->dec_ctx->coded_width = stream->codec->coded_width;
+            ist->dec_ctx->coded_height = stream->codec->coded_height;
+#endif
+
+            if (avcodec_open2(ist->dec_ctx, codec, &opts) < 0) {
+                av_log(NULL, AV_LOG_WARNING, "Could not open codec for input stream %d\n",
+                       stream->index);
+                exit(1);
+            }
+
+            if ((t = av_dict_get(opts, "", NULL, AV_DICT_IGNORE_SUFFIX))) {
+                av_log(NULL, AV_LOG_ERROR, "Option %s for input stream %d not found\n",
+                       t->key, stream->index);
+                return AVERROR_OPTION_NOT_FOUND;
+            }
+        }
+    }
+
+    ifile->fmt_ctx = fmt_ctx;
+    return 0;
+
+}
+
 static int open_input_file(InputFile *ifile, const char *filename)
 {
     int err, i;
@@ -3440,7 +3608,7 @@ static int scan_file(SCTE35Dictionary* dict, DynamicIntArray* arr, const char *f
     do_read_frames = do_show_frames || do_count_frames;
     do_read_packets = do_show_packets || do_count_packets;
 
-    ret = open_input_file(&ifile, filename);
+    ret = open_input_file_no_print(&ifile, filename);
     if (ret < 0)
         goto end;
 
