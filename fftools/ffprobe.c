@@ -104,6 +104,7 @@ static int do_show_pixel_formats = 0;
 static int do_show_pixel_format_flags = 0;
 static int do_show_pixel_format_components = 0;
 static int do_show_log = 0;
+static int only_show_scte35 = 0;
 
 static int do_show_chapter_tags = 0;
 static int do_show_format_tags = 0;
@@ -2226,6 +2227,12 @@ static void show_frame(WriterContext *w, AVFrame *frame, AVStream *stream,
     const char *s;
     int i;
 
+    if (only_show_scte35) {
+        if (!(com->in_commercial_flag) && !(av_get_picture_type_char(frame->pict_type) == 'I' && frame->key_frame) && (com->begin_commercial_pts != frame->pts) && (com->end_commercial_pts != frame->pts)) {
+            return;
+        }
+    }
+
     av_bprint_init(&pbuf, 1, AV_BPRINT_SIZE_UNLIMITED);
 
     writer_print_section_header(w, SECTION_ID_FRAME);
@@ -2286,13 +2293,13 @@ static void show_frame(WriterContext *w, AVFrame *frame, AVStream *stream,
         print_color_trc(w, frame->color_trc);
         print_chroma_location(w, frame->chroma_location);
 
-	if (strcmp(print_format, "json")) {
+	    if (strcmp(print_format, "json")) {
             if (av_get_picture_type_char(frame->pict_type) == 'I' && frame->key_frame) 
-	        printf(" <==== IDR SYNC POINT ====>");
+	            printf(" <==== IDR SYNC POINT ====>");
             if (com->begin_commercial_pts == frame->pts) 
-	        printf(" <==== SCTE35 SPLICE POINT, CUE-OUT ====>");
+	            printf(" <==== SCTE35 SPLICE POINT, CUE-OUT ====>");
 	    if (com->end_commercial_pts == frame->pts) 
-		printf(" <==== SCTE35 SPLICE POINT, CUE-IN ====>");
+		    printf(" <==== SCTE35 SPLICE POINT, CUE-IN ====>");
         }	
 
         break;
@@ -2734,44 +2741,6 @@ static int read_interval_packets(SCTE35Dictionary* dict, DynamicIntArray* arr, W
     SCTE35CommercialStruct com = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
 
     while (!av_read_frame(fmt_ctx, &pkt)) {
-	/*
-	 * struct SCTE35CommercialStruct {
-	 *     int search_IDR_flag;
-	 *     int in_commercial_flag;
-	 *     int duration_flag;
-	 *     int duration;
-	 *     int64_t scte35_pts;
-	 *     int64_t begin_commercial_pts;
-	 *     int64_t end_commercial_pts;
-	 * } SCTE35CommercialStruct;
-	 * 
-	 * // When a SCTE35 SpliceInsert OUT packet is found
-	 * commercial_struct->scte35_pts = scte35_parse...->pts;
-	 * // if SCTE35 SpliceInsert OUT packet has duration flag
-	 * commercial_struct->duration_flag = 1;
-	 * commercial_struct->duration = scte35_parse...->duration;
-         *
-	 * // When a frame is found to have a pts of greater than scte35_pts
-	 * commercial_struct->search_IDR_flag = 1;
-         * 
-	 * // during iteration, will now look for next video frame with keyframe = 1 
-	 * if (frame->key_fram) {
-	 *     commercial_struct->search_IDR_flag = 0;
-	 *     commercial_struct->in_commercial_flag = 1;
-	 *     commercial_struct->begin_commercial_pts = frame->pkt_pts;
-	 * }
-	 *
-	 * // within pts range of begin_commercial_pts + duration or while pts > begin_commercial_pts and search_IDR_flag == 0
-	 * Indicate frame is in commercial
-	 *
-	 * // Once out of pts range or SCTE35 SpliceInsert IN packet is found
-	 * search_IDR_flag = 1;
-	 *
-	 * // during iteration, will now look for next video frame with keyframe = 1
-	 * if (frame->key_frame) {
-	 *     reset_commercial_struct;
-	 * }
-	 */
 	packet_count++;
         if (fmt_ctx->nb_streams > nb_streams) {
             REALLOCZ_ARRAY_STREAM(nb_streams_frames,  nb_streams, fmt_ctx->nb_streams);
@@ -3975,6 +3944,11 @@ void show_help_default(const char *opt, const char *arg)
     show_help_children(avcodec_get_class(), AV_OPT_FLAG_DECODING_PARAM);
 }
 
+static int enable_only_SCTE35(void) {
+    only_show_scte35 = 1;
+    return 0;
+}
+
 /**
  * Parse interval specification, according to the format:
  * INTERVAL ::= [START|+START_OFFSET][%[END|+END_OFFSET]]
@@ -4224,6 +4198,7 @@ static const OptionDef real_options[] = {
     { "i", HAS_ARG, {.func_arg = opt_input_file_i}, "read specified file", "input_file"},
     { "find_stream_info", OPT_BOOL | OPT_INPUT | OPT_EXPERT, { &find_stream_info },
         "read and decode the streams to fill missing information with heuristics" },
+    { "only_show_SCTE35", 0, {(void*)&enable_only_SCTE35}, "show only info related to SCTE35 packets/timing"},
     { NULL, },
 };
 
