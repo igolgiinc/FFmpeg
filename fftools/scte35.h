@@ -150,10 +150,10 @@ typedef struct SCTE35SpliceDesc
     
     union payload {
         SCTE35AvailDescriptor avail_desc;
-	    SCTE35DTMFDescriptor dtmp_desc;
-	    SCTE35SegDescriptor seg_desc;
-	    SCTE35TimeDescriptor time_desc;
-	    uint8_t data[SPLICE_DESCRIPTOR_DATA_MAX_SIZE];
+	SCTE35DTMFDescriptor dtmp_desc;
+	SCTE35SegDescriptor seg_desc;
+	SCTE35TimeDescriptor time_desc;
+	uint8_t data[SPLICE_DESCRIPTOR_DATA_MAX_SIZE];
     } payload;
 } SCTE35SpliceDesc;
 

@@ -40,8 +40,8 @@ void* find(SCTE35Dictionary* dict, int64_t key) {
     DictionaryEntry *cur_entry = dict->entries[hash_index];
     while (cur_entry) {
         if (cur_entry->key == key) 
-	        return cur_entry->value;
-	    cur_entry = cur_entry->next;
+	    return cur_entry->value;
+	cur_entry = cur_entry->next;
     }
     return NULL;
 }
@@ -54,7 +54,7 @@ void free_entry(SCTE35Dictionary* dict, int64_t key) {
     DictionaryEntry *cur_entry = dict->entries[hash_index];
     while (cur_entry) {
         if (cur_entry->key == key)
-	        break;	   
+            break;	   
         prev_entry = cur_entry;
         cur_entry = cur_entry->next;
     }
@@ -167,7 +167,7 @@ void getting_pcr_packet_nums(DynamicIntArray* arr, int64_t target, int64_t* befo
                 *after = mid_value;
                 break;
             }
-	    }
+	}
     }
 
 }

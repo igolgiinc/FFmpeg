@@ -2765,7 +2765,7 @@ static int read_interval_packets(SCTE35Dictionary* dict, DynamicIntArray* arr, W
     memset(com, 0, sizeof(SCTE35CommercialStruct));
 
     while (!av_read_frame(fmt_ctx, &pkt)) {
-	    packet_count++;
+	packet_count++;
         if (fmt_ctx->nb_streams > nb_streams) {
             REALLOCZ_ARRAY_STREAM(nb_streams_frames,  nb_streams, fmt_ctx->nb_streams);
             REALLOCZ_ARRAY_STREAM(nb_streams_packets, nb_streams, fmt_ctx->nb_streams);
