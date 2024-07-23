@@ -2228,9 +2228,21 @@ static void show_frame(WriterContext *w, AVFrame *frame, AVStream *stream,
     int i;
 
     if (only_show_scte35) {
-        if (!(com->in_commercial_flag) && !(av_get_picture_type_char(frame->pict_type) == 'I' && frame->key_frame) && (com->begin_commercial_pts != frame->pts) && (com->end_commercial_pts != frame->pts)) {
+        if (!(com->in_commercial_flag) && !(av_get_picture_type_char(frame->pict_type) == 'I' && frame->key_frame) 
+            && (com->begin_commercial_pts != frame->pts) && (com->end_commercial_pts != frame->pts)) {
             return;
         }
+    }
+
+    if (stream->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
+        if (strcmp(print_format, "json")) {
+            if (com->begin_commercial_pts == frame->pts) 
+	            printf("<==== SCTE35 SPLICE POINT, CUE-OUT ====> ");
+            if (com->end_commercial_pts == frame->pts) 
+		        printf("<==== SCTE35 SPLICE POINT, CUE-IN ====> ");
+            if (av_get_picture_type_char(frame->pict_type) == 'I' && frame->key_frame) 
+	            printf("<==== IDR SYNC POINT ====> ");
+        }	
     }
 
     av_bprint_init(&pbuf, 1, AV_BPRINT_SIZE_UNLIMITED);
@@ -2292,15 +2304,6 @@ static void show_frame(WriterContext *w, AVFrame *frame, AVStream *stream,
         print_primaries(w, frame->color_primaries);
         print_color_trc(w, frame->color_trc);
         print_chroma_location(w, frame->chroma_location);
-
-	    if (strcmp(print_format, "json")) {
-            if (av_get_picture_type_char(frame->pict_type) == 'I' && frame->key_frame) 
-	            printf(" <==== IDR SYNC POINT ====>");
-            if (com->begin_commercial_pts == frame->pts) 
-	            printf(" <==== SCTE35 SPLICE POINT, CUE-OUT ====>");
-	    if (com->end_commercial_pts == frame->pts) 
-		    printf(" <==== SCTE35 SPLICE POINT, CUE-IN ====>");
-        }	
 
         break;
 
@@ -2542,118 +2545,128 @@ static av_always_inline int process_frame(SCTE35Dictionary *dict, DynamicIntArra
             *packet_new = 0;
         }
     } else {
-	if (par->codec_id == AV_CODEC_ID_SCTE_35 && pkt->buf != 0x0) {
+        // SCTE35 packets not recognized by baked-in decoder
+        if (par->codec_id == AV_CODEC_ID_SCTE_35 && pkt->buf != 0x0) {
             ret_scte35 = 0;
             delta_t = 0;
 
-            // SCTE35ParseSection is malloc'd to prevent memory overwriting
-	    SCTE35ParseSection *scte35_parse = (SCTE35ParseSection*)malloc(sizeof(SCTE35ParseSection));
-	    if (scte35_parse == NULL) {
-	        perror("Failed to malloc SCTE35ParseSection\n");
-		exit(EXIT_FAILURE);
-	    }
-	    scte35_parse_init(scte35_parse);
-	        
-	    getting_pcr_packet_nums(arr, fmt_ctx->cur_packet_num, &before, &after);
-	    // these are set outside of parse_SCTE35 since they rely on SCTE35TimeStruct (from scan)	
+            // SCTE35ParseSection is malloc'd to prevent memory overwriting (stores info from parsing SCTE35 packet)
+            SCTE35ParseSection *scte35_parse = (SCTE35ParseSection*)malloc(sizeof(SCTE35ParseSection));
+            if (scte35_parse == NULL) {
+                perror("Failed to malloc SCTE35ParseSection\n");
+                exit(EXIT_FAILURE);
+            }
+            scte35_parse_init(scte35_parse);
+                
+            getting_pcr_packet_nums(arr, fmt_ctx->cur_packet_num, &before, &after);
+            // these are set outside of parse_SCTE35 since they rely on SCTE35TimeStruct (from scan)	
             scte35_parse->cur_packet_num = fmt_ctx->cur_packet_num;
             scte35_parse->last_pcr_packet_num = before;
-	    scte35_parse->last_pcr = *(int64_t*)find(dict, before);
-	    scte35_parse->next_pcr = *(int64_t*)find(dict, after);
-	    scte35_parse->next_pcr_packet_num = after;
+            scte35_parse->last_pcr = *(int64_t*)find(dict, before);
+            scte35_parse->next_pcr = *(int64_t*)find(dict, after);
+            scte35_parse->next_pcr_packet_num = after;
 
-	    // fill scte35_parse object based on data field in pkt
-	    ret_scte35 = parse_SCTE35(pkt, scte35_parse);
-	    if (ret_scte35 != 0) {
-	        fprintf(stderr, "Issue when parsing SCTE35\n");
-		exit(EXIT_FAILURE);
-	    }
+            // fill scte35_parse object based on data field in pkt
+            ret_scte35 = parse_SCTE35(pkt, scte35_parse);
+            if (ret_scte35 != 0) {
+                fprintf(stderr, "Issue when parsing SCTE35\n");
+                exit(EXIT_FAILURE);
+            }
 
-	    if (scte35_parse->splice_command_type == SCTE35_CMD_INSERT) {
-		if (scte35_parse->cmd.insert.out_of_network_indicator) {
-	            com->search_out_IDR_flag = 1;
-	            if (scte35_parse->cmd.insert.duration_flag) { 
-	                com->duration = scte35_parse->cmd.insert.break_duration.duration;
-			com->duration_flag = 1;
-	                if (scte35_parse->cmd.insert.break_duration.auto_return) 	
+            // fill out com struct when current SCTE35 packet is an INSERT
+            if (scte35_parse->splice_command_type == SCTE35_CMD_INSERT) {
+                if (scte35_parse->cmd.insert.out_of_network_indicator) {
+                    com->search_out_IDR_flag = 1;
+                    if (scte35_parse->cmd.insert.duration_flag) { 
+                        com->duration = scte35_parse->cmd.insert.break_duration.duration;
+                        com->duration_flag = 1;
+                        if (scte35_parse->cmd.insert.break_duration.auto_return) 	
                             com->auto_return_flag = 1;
-		    }
+                    }
+                    
                     com->scte35_begin_commercial_pts = scte35_parse->cmd.insert.time.pts_time;
-		} else {
-		    if (com->in_commercial_flag) {
-		        com->search_in_IDR_flag = 1;
-			com->expected_end_commercial_pts = scte35_parse->cmd.insert.time.pts_time;
-		    }
-		}
-	    }
+                } else {
+                    if (com->in_commercial_flag) {
+                        com->search_in_IDR_flag = 1;
+                    com->expected_end_commercial_pts = scte35_parse->cmd.insert.time.pts_time;
+                    }
+                }
+            }
 
-	    delta_t = (scte35_parse->next_pcr - scte35_parse->last_pcr) * (scte35_parse->cur_packet_num - scte35_parse->last_pcr_packet_num);	
+            // calculating pcr for SCTE35 packet using parameters from scte35_parse
+            delta_t = (scte35_parse->next_pcr - scte35_parse->last_pcr) * (scte35_parse->cur_packet_num - scte35_parse->last_pcr_packet_num);	
             delta_t /= (scte35_parse->next_pcr_packet_num - scte35_parse->last_pcr_packet_num);
             scte35_parse->cur_pcr = (scte35_parse->last_pcr + delta_t) / 300;
-	    show_scte35_packet(w, scte35_parse);  
-	    // have to free SCTE35ParseSection object since it was malloc'd
-	    free(scte35_parse);
-	    scte35_parse = NULL;
+            show_scte35_packet(w, scte35_parse);  
+            // have to free SCTE35ParseSection object since it was malloc'd
+            free(scte35_parse);
+            scte35_parse = NULL;
 
-	}
+        }
         *packet_new = 0;
     }
 
     if (ret < 0)
         return ret;
-    if (got_frame) {
-	ft_delta = 0;
-	if (fmt_ctx->parser_pos != frame->pkt_pos && frame->pkt_pos != -1)
-	    parser_packet_num = (frame->pkt_pos / 188) + 1;
-        else
-	    parser_packet_num = (fmt_ctx->parser_pos / 188) + 1;
-	getting_pcr_packet_nums(arr, parser_packet_num, &before, &after);
 
-	if (before != after) {
-	    if (find(dict, before)) {
-		if (find(dict, after)) {
-	            next_pcr_time = *(int64_t*)find(dict, after);
-	            last_pcr_time = *(int64_t*)find(dict, before);
-		} else {
-		    next_pcr_time = *(int64_t*)find(dict, arr->values[arr->cur_index]);
-	            last_pcr_time = *(int64_t*)find(dict, arr->values[0]);
-	            before = arr->values[0];	    
-		    after = arr->values[arr->cur_index];  
-		}
-	        ft_delta = (next_pcr_time - last_pcr_time) * (parser_packet_num - before);
+    if (got_frame) {
+        ft_delta = 0;
+        // calculating current packet number
+        if (fmt_ctx->parser_pos != frame->pkt_pos && frame->pkt_pos != -1)
+            parser_packet_num = (frame->pkt_pos / 188) + 1;
+        else
+            parser_packet_num = (fmt_ctx->parser_pos / 188) + 1;
+        // getting pcr packet numbers necessary for pcr calculation
+        getting_pcr_packet_nums(arr, parser_packet_num, &before, &after);
+
+        if (before != after) {
+            // PCR calculation should be accurate if input is constant bit-rate
+            if (find(dict, before)) {
+                if (find(dict, after)) {
+                        next_pcr_time = *(int64_t*)find(dict, after);
+                        last_pcr_time = *(int64_t*)find(dict, before);
+                } else {
+                    next_pcr_time = *(int64_t*)find(dict, arr->values[arr->cur_index]);
+                        last_pcr_time = *(int64_t*)find(dict, arr->values[0]);
+                        before = arr->values[0];	    
+                    after = arr->values[arr->cur_index];  
+                }
+                ft_delta = (next_pcr_time - last_pcr_time) * (parser_packet_num - before);
                 ft_delta /= (after - before);
-		
-	        frame_pcr = (last_pcr_time + ft_delta) / 300;
-	    } else {
+            
+                frame_pcr = (last_pcr_time + ft_delta) / 300;
+            } else {
                 frame_pcr = -1;
-	    }
-	} else {
-	    frame_pcr = *(int64_t*)find(dict, after) / 300;
+            }
+        } else {
+            // for IDR packets, don't need to do calculation to find PCR (it's baked in)
+            frame_pcr = *(int64_t*)find(dict, after) / 300;
         }
 
-	if (com->search_out_IDR_flag) {
-	    if (av_get_picture_type_char(frame->pict_type) == 'I' && frame->key_frame && frame->pts > com->scte35_begin_commercial_pts) {
-	        com->search_out_IDR_flag = 0;
-		com->in_commercial_flag = 1;
-		com->begin_commercial_pts = frame->pts;
-		if (com->auto_return_flag)
-		    com->expected_end_commercial_pts = com->begin_commercial_pts + com->duration;
-	    }
-	}
+        if (com->search_out_IDR_flag) {
+            if (av_get_picture_type_char(frame->pict_type) == 'I' && frame->key_frame && frame->pts > com->scte35_begin_commercial_pts) {
+                com->search_out_IDR_flag = 0;
+            com->in_commercial_flag = 1;
+            com->begin_commercial_pts = frame->pts;
+            if (com->auto_return_flag)
+                com->expected_end_commercial_pts = com->begin_commercial_pts + com->duration;
+            }
+        }
 
         if (com->in_commercial_flag && com->auto_return_flag && frame->pts > com->expected_end_commercial_pts) 
-	    com->search_in_IDR_flag = 1;
+            com->search_in_IDR_flag = 1;
 
-	if (com->search_in_IDR_flag) {
-	    if (av_get_picture_type_char(frame->pict_type) == 'I' && frame->key_frame && frame->pts > com->expected_end_commercial_pts) {
-	        com->search_in_IDR_flag = 0;
-		com->in_commercial_flag = 0;
-		com->end_commercial_pts = frame->pts;
-	    } 
-	}
+        if (com->search_in_IDR_flag) {
+            if (av_get_picture_type_char(frame->pict_type) == 'I' && frame->key_frame && frame->pts > com->expected_end_commercial_pts) {
+                com->search_in_IDR_flag = 0;
+                com->in_commercial_flag = 0;
+                com->end_commercial_pts = frame->pts;
+            } 
+        }
 
         int is_sub = (par->codec_type == AVMEDIA_TYPE_SUBTITLE);
         nb_streams_frames[pkt->stream_index]++;
+        
         if (do_show_frames)
             if (is_sub)
                 show_subtitle(w, &sub, ifile->streams[pkt->stream_index].st, fmt_ctx);
@@ -2706,6 +2719,7 @@ static int read_interval_packets(SCTE35Dictionary* dict, DynamicIntArray* arr, W
 
     // used for calculating SCTE35 packet pcr
     fmt_ctx->cur_packet_num = 0;
+    // sanity check
     free_queue(fmt_ctx->last_pcr_queue);
     
     if (interval->has_start) {
@@ -2738,10 +2752,11 @@ static int read_interval_packets(SCTE35Dictionary* dict, DynamicIntArray* arr, W
         goto end;
     } 
    
+    // keeps track of certain variables related to SCTE35 Commercial detection
     SCTE35CommercialStruct com = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
 
     while (!av_read_frame(fmt_ctx, &pkt)) {
-	packet_count++;
+	    packet_count++;
         if (fmt_ctx->nb_streams > nb_streams) {
             REALLOCZ_ARRAY_STREAM(nb_streams_frames,  nb_streams, fmt_ctx->nb_streams);
             REALLOCZ_ARRAY_STREAM(nb_streams_packets, nb_streams, fmt_ctx->nb_streams);
@@ -2807,6 +2822,7 @@ end:
     return ret;
 }
 
+// calls read_interval_packets
 static int read_packets(SCTE35Dictionary *dict, DynamicIntArray* arr, WriterContext *w, InputFile *ifile)
 {
     AVFormatContext *fmt_ctx = ifile->fmt_ctx;
@@ -3447,6 +3463,7 @@ static void close_input_file(InputFile *ifile)
     avformat_close_input(&ifile->fmt_ctx);
 }
 
+// loops thru all packets and fills packet_num -> pcr dictionary and pcr packet num array
 static int scan_interval_packets(SCTE35Dictionary* dict, DynamicIntArray* arr, InputFile *ifile, 
 		                 const ReadInterval *interval, int64_t *cur_ts)
 {
@@ -3520,22 +3537,22 @@ static int scan_interval_packets(SCTE35Dictionary* dict, DynamicIntArray* arr, I
             } else if (has_end && *cur_ts != AV_NOPTS_VALUE && *cur_ts >= end) {
                 break;
             }
-	    frame_count++;
+            frame_count++;
 
-	    while(!check_queue_empty(fmt_ctx->last_pcr_queue)) {
+            while(!check_queue_empty(fmt_ctx->last_pcr_queue)) {
                 PCRTiming* cur_pcr_timing = dequeue(fmt_ctx->last_pcr_queue);
-		last_pcr_packet_num = cur_pcr_timing->pcr_packet_num;
-		last_pcr = cur_pcr_timing->pcr_time;
+                last_pcr_packet_num = cur_pcr_timing->pcr_packet_num;
+                last_pcr = cur_pcr_timing->pcr_time;
                 if (arr->cur_index == -1 || arr->values[arr->cur_index] != last_pcr_packet_num) {
-		    if (!find(dict, last_pcr_packet_num)) {
-		        array_insert(arr, last_pcr_packet_num);
-		        insert(dict, last_pcr_packet_num, &last_pcr);
-		    }
-	        }
-		free(cur_pcr_timing);		
+                    if (!find(dict, last_pcr_packet_num)) {
+                        array_insert(arr, last_pcr_packet_num);
+                        insert(dict, last_pcr_packet_num, &last_pcr);
+                    }
+                }
+                free(cur_pcr_timing);		
 
             }
-	    av_packet_unref(&pkt);
+            av_packet_unref(&pkt);
 
         }
    }
@@ -3548,6 +3565,7 @@ end:
     return ret;
 }
 
+// subsequently calls scan_interval_packets
 static int scan_packets(SCTE35Dictionary* dict, DynamicIntArray* arr, InputFile *ifile)
 {
     AVFormatContext *fmt_ctx = ifile->fmt_ctx;
@@ -3569,6 +3587,7 @@ static int scan_packets(SCTE35Dictionary* dict, DynamicIntArray* arr, InputFile 
 
 }
 
+// subsequently calls scan_packets
 static int scan_file(SCTE35Dictionary* dict, DynamicIntArray* arr, const char *filename) 
 {
     InputFile ifile = { 0 };
@@ -3618,6 +3637,7 @@ end:
     return ret;
 }
 
+// calls read_packets
 static int probe_file(SCTE35Dictionary* dict, DynamicIntArray* arr, WriterContext *wctx, const char *filename)
 {
     InputFile ifile = { 0 };
@@ -4345,14 +4365,17 @@ int main(int argc, char **argv)
             av_log(NULL, AV_LOG_ERROR, "Use -h to get full help or, even better, run 'man %s'.\n", program_name);
             ret = AVERROR(EINVAL);
         } else if (input_filename) {
-	    SCTE35Dictionary *dict = init_dictionary(NUM_BUCKETS, sizeof(int64_t));
-	    DynamicIntArray *arr = init_array(NUM_BUCKETS);
-	    scan_file(dict, arr, input_filename);
+            // dictionary stores packet number -> pcr
+            SCTE35Dictionary *dict = init_dictionary(NUM_BUCKETS, sizeof(int64_t));
+            // array stores all packet numbers corresponding to pcr timestamps in order
+            DynamicIntArray *arr = init_array(NUM_BUCKETS);
+            // scans input file and fills dictionary and array
+            scan_file(dict, arr, input_filename);
             ret = probe_file(dict, arr, wctx, input_filename);
-	    free_dict(dict);
-	    dict = NULL;
-	    free_array(arr);
-	    arr = NULL;
+            free_dict(dict);
+            dict = NULL;
+            free_array(arr);
+            arr = NULL;
             if (ret < 0 && do_show_error)
                 show_error(wctx, ret);
         }

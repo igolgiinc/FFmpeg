@@ -5,6 +5,7 @@
 #include "config.h"
 #include "stdio.h"
 
+// structured with chaining in mind
 typedef struct DictionaryEntry {
     int64_t key;
     void *value;
