@@ -2229,7 +2229,8 @@ static void show_frame(WriterContext *w, AVFrame *frame, AVStream *stream,
 
     if (only_show_scte35) {
         if (!(com->in_commercial_flag) && !(av_get_picture_type_char(frame->pict_type) == 'I' && frame->key_frame) 
-            && (com->begin_commercial_pts != frame->pts) && (com->end_commercial_pts != frame->pts)) {
+            && (com->begin_commercial_pts != frame->pts) && (com->end_commercial_pts != frame->pts) 
+            && !(stream->codecpar->codec_type == AVMEDIA_TYPE_AUDIO)) {
             return;
         }
     }
@@ -2643,19 +2644,21 @@ static av_always_inline int process_frame(SCTE35Dictionary *dict, DynamicIntArra
             frame_pcr = *(int64_t*)find(dict, after) / 300;
         }
 
+        // After detecting a SCTE35 INSERT CUE-OUT, we search for next IDR frame
         if (com->search_out_IDR_flag) {
             if (av_get_picture_type_char(frame->pict_type) == 'I' && frame->key_frame && frame->pts > com->scte35_begin_commercial_pts) {
                 com->search_out_IDR_flag = 0;
-            com->in_commercial_flag = 1;
-            com->begin_commercial_pts = frame->pts;
-            if (com->auto_return_flag)
-                com->expected_end_commercial_pts = com->begin_commercial_pts + com->duration;
+                com->in_commercial_flag = 1;
+                com->begin_commercial_pts = frame->pts;
+                if (com->auto_return_flag)
+                    com->expected_end_commercial_pts = com->begin_commercial_pts + com->duration;
             }
         }
 
         if (com->in_commercial_flag && com->auto_return_flag && frame->pts > com->expected_end_commercial_pts) 
             com->search_in_IDR_flag = 1;
 
+        // After detecting a SCTE35 INSERT CUE-IN, we search for the next IDR frame
         if (com->search_in_IDR_flag) {
             if (av_get_picture_type_char(frame->pict_type) == 'I' && frame->key_frame && frame->pts > com->expected_end_commercial_pts) {
                 com->search_in_IDR_flag = 0;
@@ -2666,7 +2669,7 @@ static av_always_inline int process_frame(SCTE35Dictionary *dict, DynamicIntArra
 
         int is_sub = (par->codec_type == AVMEDIA_TYPE_SUBTITLE);
         nb_streams_frames[pkt->stream_index]++;
-        
+
         if (do_show_frames)
             if (is_sub)
                 show_subtitle(w, &sub, ifile->streams[pkt->stream_index].st, fmt_ctx);
@@ -2753,7 +2756,8 @@ static int read_interval_packets(SCTE35Dictionary* dict, DynamicIntArray* arr, W
     } 
    
     // keeps track of certain variables related to SCTE35 Commercial detection
-    SCTE35CommercialStruct com = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+    SCTE35CommercialStruct* com = (SCTE35CommercialStruct*)malloc(sizeof(SCTE35CommercialStruct));
+    memset(com, 0, sizeof(SCTE35CommercialStruct));
 
     while (!av_read_frame(fmt_ctx, &pkt)) {
 	    packet_count++;
@@ -2795,7 +2799,7 @@ static int read_interval_packets(SCTE35Dictionary* dict, DynamicIntArray* arr, W
             }
             if (do_read_frames) {
                 int packet_new = 1;
-                while (process_frame(dict, arr, &com, w, ifile, frame, &pkt, &packet_new) > 0);
+                while (process_frame(dict, arr, com, w, ifile, frame, &pkt, &packet_new) > 0);
             }
         }
         av_packet_unref(&pkt);
@@ -2808,13 +2812,14 @@ static int read_interval_packets(SCTE35Dictionary* dict, DynamicIntArray* arr, W
     for (i = 0; i < fmt_ctx->nb_streams; i++) {
         pkt.stream_index = i;
         if (do_read_frames)
-            while (process_frame(dict, arr, &com, w, ifile, frame, &pkt, &(int){1}) > 0);
+            while (process_frame(dict, arr, com, w, ifile, frame, &pkt, &(int){1}) > 0);
     }
 
 end:
     av_frame_free(&frame); 
     free_queue(fmt_ctx->last_pcr_queue);
     free(fmt_ctx->last_pcr_queue);
+    free(com);
     if (ret < 0) {
         av_log(NULL, AV_LOG_ERROR, "Could not read packets in interval ");
         log_read_interval(interval, NULL, AV_LOG_ERROR);
