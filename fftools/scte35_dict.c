@@ -155,19 +155,19 @@ void getting_pcr_packet_nums(DynamicIntArray* arr, int64_t target, int64_t* befo
     if (arr->cur_index != -1) {
         while (l <= r) {
             mid = (l + r) / 2;
-	    int64_t mid_value = arr->values[mid];
-	    if (mid_value < target) {
-	        *before = mid_value;
-		l = mid + 1;
-	    } else if (mid_value > target) {
-	        *after = mid_value;
-		r = mid - 1;
-	    } else {
-		*before = mid_value;
-		*after = mid_value;
-		break;
+            int64_t mid_value = arr->values[mid];
+            if (mid_value < target) {
+                *before = mid_value;
+                l = mid + 1;
+            } else if (mid_value > target) {
+                *after = mid_value;
+                r = mid - 1;
+            } else {
+                *before = mid_value;
+                *after = mid_value;
+                break;
             }
-	}
+	    }
     }
 
 }

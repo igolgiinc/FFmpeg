@@ -2157,58 +2157,61 @@ static void show_scte35_packet(WriterContext *w, SCTE35ParseSection *scte35_ptr)
     switch(splice_command_type){
         case SCTE35_CMD_NULL:
             strcpy(command_type_str, "NULL");
-	    break;
+	        break;
         case SCTE35_CMD_SCHEDULE:
-	    strcpy(command_type_str, "SCHEDULE");
-	    break;
+	        strcpy(command_type_str, "SCHEDULE");
+	        break;
         case SCTE35_CMD_INSERT:
-	    strcpy(command_type_str, "INSERT");
-	    break;
-	case SCTE35_CMD_TIME_SIGNAL:
+	        strcpy(command_type_str, "INSERT");
+	        break;
+        case SCTE35_CMD_TIME_SIGNAL:
             strcpy(command_type_str, "TIME_SIGNAL");
             break;
-	case SCTE35_CMD_BW_RESERVATION:
+        case SCTE35_CMD_BW_RESERVATION:
             strcpy(command_type_str, "BANDWIDTH_RESERVATION");
-	    break;
-	case SCTE35_CMD_PRIVATE_CMD:
+            break;
+        case SCTE35_CMD_PRIVATE_CMD:
             strcpy(command_type_str, "PRIVATE");
-	    break;
-	default:
-	    strcpy(command_type_str, "UNKNOWN");
-	    break;
+            break;
+        default:
+            strcpy(command_type_str, "UNKNOWN");
+            break;
     }    
+
     if (splice_command_type == SCTE35_CMD_INSERT || splice_command_type == SCTE35_CMD_TIME_SIGNAL) {
         print_ts("PCR", scte35_ptr->cur_pcr);
         print_str("SCTE35_cmd_type", command_type_str);
-	print_int("SCTE35_packet_num", scte35_ptr->cur_packet_num);
-	if (splice_command_type == SCTE35_CMD_INSERT) {
-	    print_ts("SCTE35_pts_time", scte35_ptr->cmd.insert.time.pts_time);
-	    if (scte35_ptr->cmd.insert.out_of_network_indicator) {
-	        print_int("SCTE35_auto_return", scte35_ptr->cmd.insert.break_duration.auto_return);
-		if (scte35_ptr->cmd.insert.duration_flag) 	
-	            print_int("SCTE35_duration", scte35_ptr->cmd.insert.break_duration.duration);
-                print_str("SCTE35_in_out_network", "OUT");
-	    } else {
-	        print_str("SCTE35_in_out_network", "IN");
-	    }
-	} else {
-            print_ts("SCTE35_pts_time", scte35_ptr->cmd.time_signal.time.pts_time);
-	}
+	    print_int("SCTE35_packet_num", scte35_ptr->cur_packet_num);
 
-	if (!strcmp(print_format, "json")) {
+        if (splice_command_type == SCTE35_CMD_INSERT) {
+            print_ts("SCTE35_pts_time", scte35_ptr->cmd.insert.time.pts_time);
+            if (scte35_ptr->cmd.insert.out_of_network_indicator) {
+                print_int("SCTE35_auto_return", scte35_ptr->cmd.insert.break_duration.auto_return);
+                if (scte35_ptr->cmd.insert.duration_flag) 	
+                    print_int("SCTE35_duration", scte35_ptr->cmd.insert.break_duration.duration);
+                print_str("SCTE35_in_out_network", "OUT");
+            } else {
+                print_str("SCTE35_in_out_network", "IN");
+            }
+        } else {
+            print_ts("SCTE35_pts_time", scte35_ptr->cmd.time_signal.time.pts_time);
+        }
+
+        if (!strcmp(print_format, "json")) {
             show_scte35_json(w, scte35_ptr);    
         } else {
-	    printf("\n");
-            
-	    if (splice_command_type == SCTE35_CMD_INSERT) {
-	        if (scte35_ptr->cmd.insert.splice_immediate_flag)
-	            print_str("IMMEDIATE", "TRUE");
-	        else
-	            print_str("IMMEDIATE", "FALSE");
-	        print_int("PREROLL", scte35_ptr->cur_pcr - scte35_ptr->cmd.insert.time.pts_time);
+            printf("\n");
+                
+            if (splice_command_type == SCTE35_CMD_INSERT) {
+                if (scte35_ptr->cmd.insert.splice_immediate_flag)
+                    print_str("IMMEDIATE", "TRUE");
+                else
+                    print_str("IMMEDIATE", "FALSE");
+
+                print_int("PREROLL", scte35_ptr->cur_pcr - scte35_ptr->cmd.insert.time.pts_time);
                 print_int("ID", scte35_ptr->cmd.insert.splice_event_id);
-		printf("\n");
-	    }
+                printf("\n");
+            }
         }
     } else {
         print_str("PCR", "N/A");
@@ -2229,10 +2232,12 @@ static void show_frame(WriterContext *w, AVFrame *frame, AVStream *stream,
 
     if (only_show_scte35) {
         if (!(com->in_commercial_flag) && !(av_get_picture_type_char(frame->pict_type) == 'I' && frame->key_frame) 
-            && (com->begin_commercial_pts != frame->pts) && (com->end_commercial_pts != frame->pts) 
-            && !(stream->codecpar->codec_type == AVMEDIA_TYPE_AUDIO)) {
+            && (com->begin_commercial_pts != frame->pts) && (com->end_commercial_pts != frame->pts)) {
             return;
         }
+        
+        if (stream->codecpar->codec_type == AVMEDIA_TYPE_AUDIO)
+            return;
     }
 
     if (stream->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
@@ -2451,7 +2456,7 @@ static int parse_SCTE35(AVPacket *pkt, SCTE35ParseSection *scte35_ptr)
     }
 
     if (rc)
-	return rc;
+	    return rc;
 
     pdat = &data_ptr[SPLICE_INFO_FIXED_SIZE + nr];
 
@@ -2482,10 +2487,10 @@ static int parse_SCTE35(AVPacket *pkt, SCTE35ParseSection *scte35_ptr)
     if (scte35_ptr->encrypted_packet){
         scte35_ptr->e_crc = (((uint32_t)*pdat++) & 0xff) << 24;
         scte35_ptr->e_crc |= (((uint32_t)*pdat++) & 0xff) << 16;
-	scte35_ptr->e_crc |= (((uint32_t)*pdat++) & 0xff) << 8;
+	    scte35_ptr->e_crc |= (((uint32_t)*pdat++) & 0xff) << 8;
         scte35_ptr->e_crc |= (((uint32_t)*pdat++) & 0xff);
-    }else{
-	scte35_ptr->e_crc = 0;
+    } else { 
+	    scte35_ptr->e_crc = 0;
     }
 
     scte35_ptr->crc = (((uint32_t)*pdat++) & 0xff) << 24;

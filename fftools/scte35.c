@@ -253,7 +253,7 @@ static int parse_splice_segmentation(unsigned char *field, unsigned char *table,
 
         if (sd->segmentation_upid_length < SPLICE_DESCRIPTOR_DATA_MAX_SIZE) {
             sd->segmentation_upid[i] = '\0';
-        } // otherwise, print unable to null terminate segmentation_upid
+        }
 
         sd->segmentation_type_id = *pdat++;
         sd->segment_num = *pdat++;
@@ -317,8 +317,8 @@ int parse_splice_descriptor(unsigned char *field, unsigned char *table,
             nr = parse_splice_segmentation(pdat, table, &splice_desc->payload.seg_desc);
             pdat += nr;
             break;
-            default:
-                for(i = 0; i < nd; i++){
+        default:
+            for(i = 0; i < nd; i++) {
                 splice_desc->payload.data[i] = *pdat++;
             }
             break;
