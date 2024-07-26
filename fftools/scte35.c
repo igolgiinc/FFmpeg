@@ -80,7 +80,7 @@ static int parse_splice_time(unsigned char *field, unsigned char *table,
 				(((uint64_t)*(pdat + 2) & 0xff) << 16) +
 				(((uint64_t)*(pdat + 3) & 0xff) << 8) +
 				(((uint64_t)*(pdat + 4) & 0xff) << 0);
-	pdat += 5;
+	    pdat += 5;
     } else {
         splice_time->pts_time = 0;
     }
@@ -142,7 +142,7 @@ int parse_insert(unsigned char *cmd, unsigned char *table,
     
     if (pcmd->splice_event_cancel_indicator == 0) {
         pcmd->out_of_network_indicator = (*pdat >> 7) & 1;
-	pcmd->program_splice_flag = (*pdat >> 6) & 1;
+	    pcmd->program_splice_flag = (*pdat >> 6) & 1;
         pcmd->duration_flag = (*pdat >> 5) & 1;
         pcmd->splice_immediate_flag = (*pdat >> 4) & 1;
         pcmd->reserved_2 = *pdat & 0xf;

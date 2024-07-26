@@ -2133,13 +2133,13 @@ static void show_scte35_json(WriterContext *w, SCTE35ParseSection *scte35_ptr)
     print_int("SCTE35_crc", scte35_ptr->crc);
     if (scte35_ptr->splice_command_type == SCTE35_CMD_INSERT) {
         print_int("SCTE35_INSERT_splice_event_id", scte35_ptr->cmd.insert.splice_event_id);
-	print_int("SCTE35_INSERT_splice_event_cancel_indicator", scte35_ptr->cmd.insert.splice_event_cancel_indicator);
+	    print_int("SCTE35_INSERT_splice_event_cancel_indicator", scte35_ptr->cmd.insert.splice_event_cancel_indicator);
         print_int("SCTE35_INSERT_splice_immediate_flag", scte35_ptr->cmd.insert.splice_immediate_flag);
         if (scte35_ptr->cmd.insert.component_count != -1)	
-	    print_int("SCTE35_INSERT_component_count", scte35_ptr->cmd.insert.component_count);
-	print_int("SCTE35_INSERT_unique_program_id", scte35_ptr->cmd.insert.unique_program_id);
-	print_int("SCTE35_INSERT_avail_num", scte35_ptr->cmd.insert.avail_num);
-	print_int("SCTE35_INSERT_avails_expected", scte35_ptr->cmd.insert.avails_expected);
+	        print_int("SCTE35_INSERT_component_count", scte35_ptr->cmd.insert.component_count);
+        print_int("SCTE35_INSERT_unique_program_id", scte35_ptr->cmd.insert.unique_program_id);
+        print_int("SCTE35_INSERT_avail_num", scte35_ptr->cmd.insert.avail_num);
+        print_int("SCTE35_INSERT_avails_expected", scte35_ptr->cmd.insert.avails_expected);
     }
 
 }
@@ -2195,24 +2195,26 @@ static void show_scte35_packet(WriterContext *w, SCTE35ParseSection *scte35_ptr)
             }
         } else {
             print_ts("SCTE35_pts_time", scte35_ptr->cmd.time_signal.time.pts_time);
+            if (scte35_ptr->splice_descriptor.payload.seg_desc.segmentation_duration_flag)
+                print_int("SCTE35_duration", scte35_ptr->splice_descriptor.payload.seg_desc.segmentation_duration);
         }
 
-        if (!strcmp(print_format, "json")) {
-            show_scte35_json(w, scte35_ptr);    
-        } else {
+        //if (!strcmp(print_format, "json")) {
+        //    show_scte35_json(w, scte35_ptr);    
+        //} else {    
+        if (splice_command_type == SCTE35_CMD_INSERT) {
+            if (scte35_ptr->cmd.insert.splice_immediate_flag)
+                print_str("IMMEDIATE", "TRUE");
+            else
+                print_str("IMMEDIATE", "FALSE");
+
+            print_int("PREROLL", scte35_ptr->cur_pcr - scte35_ptr->cmd.insert.time.pts_time);
+            print_int("ID", scte35_ptr->cmd.insert.splice_event_id);
+            
+        }
+        if (strcmp(print_format, "json"))
             printf("\n");
-                
-            if (splice_command_type == SCTE35_CMD_INSERT) {
-                if (scte35_ptr->cmd.insert.splice_immediate_flag)
-                    print_str("IMMEDIATE", "TRUE");
-                else
-                    print_str("IMMEDIATE", "FALSE");
-
-                print_int("PREROLL", scte35_ptr->cur_pcr - scte35_ptr->cmd.insert.time.pts_time);
-                print_int("ID", scte35_ptr->cmd.insert.splice_event_id);
-                printf("\n");
-            }
-        }
+        //}
     } else {
         print_str("PCR", "N/A");
     }
@@ -2236,29 +2238,38 @@ static void show_frame(WriterContext *w, AVFrame *frame, AVStream *stream,
             return;
         }
         
-        if (stream->codecpar->codec_type == AVMEDIA_TYPE_AUDIO)
-            return;
+        /*if (stream->codecpar->codec_type == AVMEDIA_TYPE_AUDIO)
+            return;*/
     }
 
-    if (stream->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
-        if (strcmp(print_format, "json")) {
-            if (com->begin_commercial_pts == frame->pts) 
-	            printf("<==== SCTE35 SPLICE POINT, CUE-OUT ====> ");
-            if (com->end_commercial_pts == frame->pts) 
-		        printf("<==== SCTE35 SPLICE POINT, CUE-IN ====> ");
-            if (av_get_picture_type_char(frame->pict_type) == 'I' && frame->key_frame) 
-	            printf("<==== IDR SYNC POINT ====> ");
-        }	
+    if (strcmp(print_format, "json") && stream->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
+        if (com->begin_commercial_pts == frame->pts) 
+            printf("<==== SCTE35 SPLICE POINT, CUE-OUT ====> ");
+        if (com->end_commercial_pts == frame->pts) 
+            printf("<==== SCTE35 SPLICE POINT, CUE-IN ====> ");
+        if (av_get_picture_type_char(frame->pict_type) == 'I' && frame->key_frame) 
+            printf("<==== IDR SYNC POINT ====> ");
     }
 
     av_bprint_init(&pbuf, 1, AV_BPRINT_SIZE_UNLIMITED);
 
     writer_print_section_header(w, SECTION_ID_FRAME);
 
+    if (stream->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
+        if (!strcmp(print_format, "json")) {
+            if (com->begin_commercial_pts == frame->pts) 
+	            printf("<==== SCTE35 SPLICE POINT, CUE-OUT ====> ");
+            if (com->end_commercial_pts == frame->pts) 
+		        printf("<==== SCTE35 SPLICE POINT, CUE-IN ====> ");
+            if (av_get_picture_type_char(frame->pict_type) == 'I' && frame->key_frame) 
+	            printf("<==== IDR SYNC POINT ====> ");
+        }
+    }
+
     if (frame_pcr != -1)
         print_ts("PCR",                frame_pcr);
     else
-	print_str("PCR",                "N/A");
+	    print_str("PCR",                "N/A");
 
     s = av_get_media_type_string(stream->codecpar->codec_type);
     if (s) print_str    ("media_type", s);
@@ -2275,58 +2286,59 @@ static void show_frame(WriterContext *w, AVFrame *frame, AVStream *stream,
     print_duration_ts  ("pkt_duration",      frame->pkt_duration);
     print_duration_time("pkt_duration_time", frame->pkt_duration, &stream->time_base);
     if (frame->pkt_pos != -1) print_fmt    ("pkt_pos", "%"PRId64, frame->pkt_pos);
-
     else                      print_str_opt("pkt_pos", "N/A");
     if (frame->pkt_size != -1) print_val    ("pkt_size", frame->pkt_size, unit_byte_str);
     else                       print_str_opt("pkt_size", "N/A");
 
-    if (com->in_commercial_flag && com->duration_flag && frame->pts > com->begin_commercial_pts) 
+    if (com->in_commercial_flag && com->duration_flag && frame->pts > com->begin_commercial_pts) {
         print_int("SCTE35_REMAINING", com->duration - (frame->pts - com->begin_commercial_pts));
+        print_str("network_status", "OUT");
+    }
 
     switch (stream->codecpar->codec_type) {
         AVRational sar;
 
-    case AVMEDIA_TYPE_VIDEO:
-        print_int("width",                  frame->width);
-        print_int("height",                 frame->height);
-        s = av_get_pix_fmt_name(frame->format);
-        if (s) print_str    ("pix_fmt", s);
-        else   print_str_opt("pix_fmt", "unknown");
-        sar = av_guess_sample_aspect_ratio(fmt_ctx, stream, frame);
-        if (sar.num) {
+        case AVMEDIA_TYPE_VIDEO:
+            print_int("width",                  frame->width);
+            print_int("height",                 frame->height);
+            s = av_get_pix_fmt_name(frame->format);
+            if (s) print_str    ("pix_fmt", s);
+            else   print_str_opt("pix_fmt", "unknown");
+            sar = av_guess_sample_aspect_ratio(fmt_ctx, stream, frame);
+            if (sar.num) {
             print_q("sample_aspect_ratio", sar, ':');
-        } else {
+            } else {
             print_str_opt("sample_aspect_ratio", "N/A");
-        }
-        print_fmt("pict_type",              "%c", av_get_picture_type_char(frame->pict_type));
-        print_int("coded_picture_number",   frame->coded_picture_number);
-        print_int("display_picture_number", frame->display_picture_number);
-        print_int("interlaced_frame",       frame->interlaced_frame);
-        print_int("top_field_first",        frame->top_field_first);
-        print_int("repeat_pict",            frame->repeat_pict);
+            }
+            print_fmt("pict_type",              "%c", av_get_picture_type_char(frame->pict_type));
+            print_int("coded_picture_number",   frame->coded_picture_number);
+            print_int("display_picture_number", frame->display_picture_number);
+            print_int("interlaced_frame",       frame->interlaced_frame);
+            print_int("top_field_first",        frame->top_field_first);
+            print_int("repeat_pict",            frame->repeat_pict);
 
-        print_color_range(w, frame->color_range);
-        print_color_space(w, frame->colorspace);
-        print_primaries(w, frame->color_primaries);
-        print_color_trc(w, frame->color_trc);
-        print_chroma_location(w, frame->chroma_location);
+            print_color_range(w, frame->color_range);
+            print_color_space(w, frame->colorspace);
+            print_primaries(w, frame->color_primaries);
+            print_color_trc(w, frame->color_trc);
+            print_chroma_location(w, frame->chroma_location);
 
-        break;
+            break;
 
-    case AVMEDIA_TYPE_AUDIO:
-        s = av_get_sample_fmt_name(frame->format);
-        if (s) print_str    ("sample_fmt", s);
-        else   print_str_opt("sample_fmt", "unknown");
-        print_int("nb_samples",         frame->nb_samples);
-        print_int("channels", frame->channels);
-        if (frame->channel_layout) {
+        case AVMEDIA_TYPE_AUDIO:
+            s = av_get_sample_fmt_name(frame->format);
+            if (s) print_str    ("sample_fmt", s);
+            else   print_str_opt("sample_fmt", "unknown");
+            print_int("nb_samples",         frame->nb_samples);
+            print_int("channels", frame->channels);
+            if (frame->channel_layout) {
             av_bprint_clear(&pbuf);
             av_bprint_channel_layout(&pbuf, frame->channels,
-                                     frame->channel_layout);
+                                    frame->channel_layout);
             print_str    ("channel_layout", pbuf.str);
-        } else
+            } else
             print_str_opt("channel_layout", "unknown");
-        break;
+            break;
     }
 
     if (do_show_frame_tags)
@@ -2369,6 +2381,7 @@ static void show_frame(WriterContext *w, AVFrame *frame, AVStream *stream,
                     print_q("min_luminance", metadata->min_luminance, '/');
                     print_q("max_luminance", metadata->max_luminance, '/');
                 }
+
             } else if (sd->type == AV_FRAME_DATA_CONTENT_LIGHT_LEVEL) {
                 AVContentLightMetadata *metadata = (AVContentLightMetadata *)sd->data;
                 print_int("max_content", metadata->MaxCLL);
@@ -2481,7 +2494,7 @@ static int parse_SCTE35(AVPacket *pkt, SCTE35ParseSection *scte35_ptr)
     scte35_ptr->num_alignment_bytes = 0;
     if (nl > remaining_byte_count) {
         scte35_ptr->num_alignment_bytes = nl - remaining_byte_count;
-	pdat += scte35_ptr->num_alignment_bytes;
+	    pdat += scte35_ptr->num_alignment_bytes;
     }
 
     if (scte35_ptr->encrypted_packet){
@@ -2522,33 +2535,33 @@ static av_always_inline int process_frame(SCTE35Dictionary *dict, DynamicIntArra
     clear_log(1);
     if (dec_ctx && dec_ctx->codec) {
         switch (par->codec_type) {
-        case AVMEDIA_TYPE_VIDEO:
-        case AVMEDIA_TYPE_AUDIO:
-            if (*packet_new) {
-                ret = avcodec_send_packet(dec_ctx, pkt);
-                if (ret == AVERROR(EAGAIN)) {
-                    ret = 0;
-                } else if (ret >= 0 || ret == AVERROR_EOF) {
-                    ret = 0;
-                    *packet_new = 0;
+            case AVMEDIA_TYPE_VIDEO:
+            case AVMEDIA_TYPE_AUDIO:
+                if (*packet_new) {
+                    ret = avcodec_send_packet(dec_ctx, pkt);
+                    if (ret == AVERROR(EAGAIN)) {
+                        ret = 0;
+                    } else if (ret >= 0 || ret == AVERROR_EOF) {
+                        ret = 0;
+                        *packet_new = 0;
+                    }
                 }
-            }
-            if (ret >= 0) {
-                ret = avcodec_receive_frame(dec_ctx, frame);
                 if (ret >= 0) {
-                    got_frame = 1;
-                } else if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) {
-                    ret = 0;
+                    ret = avcodec_receive_frame(dec_ctx, frame);
+                    if (ret >= 0) {
+                        got_frame = 1;
+                    } else if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) {
+                        ret = 0;
+                    }
                 }
-            }
-            break;
-        case AVMEDIA_TYPE_SUBTITLE:
-            if (*packet_new)
-                ret = avcodec_decode_subtitle2(dec_ctx, &sub, &got_frame, pkt);
-            *packet_new = 0;
-            break;
-        default:
-            *packet_new = 0;
+                break;
+            case AVMEDIA_TYPE_SUBTITLE:
+                if (*packet_new)
+                    ret = avcodec_decode_subtitle2(dec_ctx, &sub, &got_frame, pkt);
+                *packet_new = 0;
+                break;
+            default:
+                *packet_new = 0;
         }
     } else {
         // SCTE35 packets not recognized by baked-in decoder
@@ -2603,6 +2616,21 @@ static av_always_inline int process_frame(SCTE35Dictionary *dict, DynamicIntArra
             delta_t = (scte35_parse->next_pcr - scte35_parse->last_pcr) * (scte35_parse->cur_packet_num - scte35_parse->last_pcr_packet_num);	
             delta_t /= (scte35_parse->next_pcr_packet_num - scte35_parse->last_pcr_packet_num);
             scte35_parse->cur_pcr = (scte35_parse->last_pcr + delta_t) / 300;
+
+            if (scte35_parse->splice_command_type == SCTE35_CMD_TIME_SIGNAL) {
+                if (scte35_parse->splice_descriptor.payload.seg_desc.segmentation_duration_flag) {
+                    com->search_out_IDR_flag = 1;
+                    com->duration = scte35_parse->splice_descriptor.payload.seg_desc.segmentation_duration;
+                    com->duration_flag = 1;
+                    com->scte35_begin_commercial_pts = scte35_parse->cur_pcr;
+                } else {
+                    if (com->in_commercial_flag) {
+                        com->search_in_IDR_flag = 1;
+                    com->expected_end_commercial_pts = scte35_parse->cur_pcr;
+                    }
+                }
+            }
+
             show_scte35_packet(w, scte35_parse);  
             // have to free SCTE35ParseSection object since it was malloc'd
             free(scte35_parse);
@@ -2683,6 +2711,7 @@ static av_always_inline int process_frame(SCTE35Dictionary *dict, DynamicIntArra
         if (is_sub)
             avsubtitle_free(&sub);
     }
+
     return got_frame || *packet_new;
 }
 
@@ -2765,7 +2794,7 @@ static int read_interval_packets(SCTE35Dictionary* dict, DynamicIntArray* arr, W
     memset(com, 0, sizeof(SCTE35CommercialStruct));
 
     while (!av_read_frame(fmt_ctx, &pkt)) {
-	packet_count++;
+	    packet_count++;
         if (fmt_ctx->nb_streams > nb_streams) {
             REALLOCZ_ARRAY_STREAM(nb_streams_frames,  nb_streams, fmt_ctx->nb_streams);
             REALLOCZ_ARRAY_STREAM(nb_streams_packets, nb_streams, fmt_ctx->nb_streams);
