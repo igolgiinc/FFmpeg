@@ -2258,11 +2258,11 @@ static void show_frame(WriterContext *w, AVFrame *frame, AVStream *stream,
     if (stream->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
         if (!strcmp(print_format, "json")) {
             if (com->begin_commercial_pts == frame->pts) 
-	            printf("<==== SCTE35 SPLICE POINT, CUE-OUT ====> ");
+	            print_str("SCTE35_splice_point", "CUE-OUT");
             if (com->end_commercial_pts == frame->pts) 
-		        printf("<==== SCTE35 SPLICE POINT, CUE-IN ====> ");
+		        print_str("SCTE35_splice_point", "CUE-IN");
             if (av_get_picture_type_char(frame->pict_type) == 'I' && frame->key_frame) 
-	            printf("<==== IDR SYNC POINT ====> ");
+	            print_str("IDR_sync_point", "TRUE");
         }
     }
 
