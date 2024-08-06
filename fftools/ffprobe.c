@@ -132,6 +132,7 @@ typedef struct ReadInterval {
 } ReadInterval;
 
 #define NUM_BUCKETS 22303 
+#define BIT_RATE_THRESH 500
 
 static ReadInterval *read_intervals;
 static int read_intervals_nb = 0;
@@ -2517,7 +2518,7 @@ static int parse_SCTE35(AVPacket *pkt, SCTE35ParseSection *scte35_ptr)
 static av_always_inline int process_frame(SCTE35Dictionary *dict, DynamicIntArray* arr, SCTE35CommercialStruct *com, WriterContext *w,
                                           InputFile *ifile,
                                           AVFrame *frame, AVPacket *pkt,
-                                          int *packet_new)
+                                          int *packet_new, int64_t calculated_bit_rate, int *cbr)
 {
     AVFormatContext *fmt_ctx = ifile->fmt_ctx;
     AVCodecContext *dec_ctx = ifile->streams[pkt->stream_index].dec_ctx;
@@ -2529,6 +2530,8 @@ static av_always_inline int process_frame(SCTE35Dictionary *dict, DynamicIntArra
     int ret_scte35;
     int64_t frame_pcr;
     int64_t before, after;
+    int64_t start_pos, start_pcr, end_pos, end_pcr;
+    int64_t bit_rate;
     int64_t parser_packet_num;
     int64_t last_pcr_time, next_pcr_time;
 
@@ -2669,9 +2672,16 @@ static av_always_inline int process_frame(SCTE35Dictionary *dict, DynamicIntArra
                 ft_delta /= (after - before);
             
                 frame_pcr = (last_pcr_time + ft_delta) / 300;
+
+                end_pos = (after * 188) * 8;
+                start_pos = (before * 188) * 8;
+                bit_rate = (int)((end_pos - start_pos) / ((next_pcr_time - last_pcr_time) / 27000000.0));
+                if (abs(bit_rate - calculated_bit_rate) > BIT_RATE_THRESH)
+                    *cbr = 0;
             } else {
                 frame_pcr = -1;
             }
+
         } else {
             // for IDR packets, don't need to do calculation to find PCR (it's baked in)
             frame_pcr = *(int64_t*)find(dict, after) / 300;
@@ -2745,9 +2755,11 @@ static int read_interval_packets(SCTE35Dictionary* dict, DynamicIntArray* arr, W
     AVFormatContext *fmt_ctx = ifile->fmt_ctx;
     AVPacket pkt;
     AVFrame *frame = NULL;
-    int ret = 0, i = 0, frame_count = 0;
+    int ret = 0, i = 0, frame_count = 0, bit_rate = 0;
     int64_t start = -INT64_MAX, end = interval->end;
+    int64_t start_packet, end_packet, start_pcr, end_pcr, start_pos, end_pos, bit_rate_calc;
     int has_start = 0, has_end = interval->has_end && !interval->end_is_offset;
+    int cbr = 1;
 
     av_init_packet(&pkt);
 
@@ -2793,6 +2805,15 @@ static int read_interval_packets(SCTE35Dictionary* dict, DynamicIntArray* arr, W
     SCTE35CommercialStruct* com = (SCTE35CommercialStruct*)malloc(sizeof(SCTE35CommercialStruct));
     memset(com, 0, sizeof(SCTE35CommercialStruct));
 
+    start_packet = arr->values[0];
+    start_pos = ((start_packet - 1) * 188) * 8;
+    end_packet = arr->values[arr->cur_index];
+    end_pos = ((end_packet - 1) * 188) * 8;
+    start_pcr = *(int64_t*)find(dict, start_packet);
+    end_pcr = *(int64_t*)find(dict, end_packet);
+
+    bit_rate_calc = (int)((end_pos - start_pos) / ((end_pcr - start_pcr) / 27000000.0));
+
     while (!av_read_frame(fmt_ctx, &pkt)) {
 	    packet_count++;
         if (fmt_ctx->nb_streams > nb_streams) {
@@ -2833,11 +2854,16 @@ static int read_interval_packets(SCTE35Dictionary* dict, DynamicIntArray* arr, W
             }
             if (do_read_frames) {
                 int packet_new = 1;
-                while (process_frame(dict, arr, com, w, ifile, frame, &pkt, &packet_new) > 0);
+                while (process_frame(dict, arr, com, w, ifile, frame, &pkt, &packet_new, bit_rate_calc, &cbr) > 0);
             }
         }
         av_packet_unref(&pkt);
     }
+
+    if(cbr && strcmp(print_format, "json"))
+        printf("\nStream has constant bit rate\n");
+    else
+        printf("\nStream does not have constant bit rate\n\n");
 
     av_init_packet(&pkt);
     pkt.data = NULL;
@@ -2846,7 +2872,7 @@ static int read_interval_packets(SCTE35Dictionary* dict, DynamicIntArray* arr, W
     for (i = 0; i < fmt_ctx->nb_streams; i++) {
         pkt.stream_index = i;
         if (do_read_frames)
-            while (process_frame(dict, arr, com, w, ifile, frame, &pkt, &(int){1}) > 0);
+            while (process_frame(dict, arr, com, w, ifile, frame, &pkt, &(int){1}, bit_rate_calc, &cbr) > 0);
     }
 
 end:
