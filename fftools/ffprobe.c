@@ -2182,10 +2182,10 @@ static void show_scte35_packet(WriterContext *w, SCTE35ParseSection *scte35_ptr)
     if (splice_command_type == SCTE35_CMD_INSERT || splice_command_type == SCTE35_CMD_TIME_SIGNAL) {
         print_ts("PCR", scte35_ptr->cur_pcr);
         print_str("SCTE35_cmd_type", command_type_str);
-	    print_int("SCTE35_packet_num", scte35_ptr->cur_packet_num);
+	    print_int("packet_num", scte35_ptr->cur_packet_num);
 
         if (splice_command_type == SCTE35_CMD_INSERT) {
-            print_ts("SCTE35_pts_time", scte35_ptr->cmd.insert.time.pts_time);
+            print_ts("pkt_pts", scte35_ptr->cmd.insert.time.pts_time);
             if (scte35_ptr->cmd.insert.out_of_network_indicator) {
                 print_int("SCTE35_auto_return", scte35_ptr->cmd.insert.break_duration.auto_return);
                 if (scte35_ptr->cmd.insert.duration_flag) 	
