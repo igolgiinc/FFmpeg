@@ -2239,8 +2239,8 @@ static void show_frame(WriterContext *w, AVFrame *frame, AVStream *stream,
             return;
         }
         
-        /*if (stream->codecpar->codec_type == AVMEDIA_TYPE_AUDIO)
-            return;*/
+        if (stream->codecpar->codec_type == AVMEDIA_TYPE_AUDIO)
+            return;
     }
 
     if (strcmp(print_format, "json") && stream->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
@@ -2620,6 +2620,7 @@ static av_always_inline int process_frame(SCTE35Dictionary *dict, DynamicIntArra
             delta_t /= (scte35_parse->next_pcr_packet_num - scte35_parse->last_pcr_packet_num);
             scte35_parse->cur_pcr = (scte35_parse->last_pcr + delta_t) / 300;
 
+            /*
             if (scte35_parse->splice_command_type == SCTE35_CMD_TIME_SIGNAL) {
                 if (scte35_parse->splice_descriptor.payload.seg_desc.segmentation_duration_flag) {
                     com->search_out_IDR_flag = 1;
@@ -2632,7 +2633,7 @@ static av_always_inline int process_frame(SCTE35Dictionary *dict, DynamicIntArra
                     com->expected_end_commercial_pts = scte35_parse->cur_pcr;
                     }
                 }
-            }
+            }*/
 
             show_scte35_packet(w, scte35_parse);  
             // have to free SCTE35ParseSection object since it was malloc'd
@@ -2759,7 +2760,7 @@ static int read_interval_packets(SCTE35Dictionary* dict, DynamicIntArray* arr, W
     int64_t start = -INT64_MAX, end = interval->end;
     int64_t start_packet, end_packet, start_pcr, end_pcr, start_pos, end_pos, bit_rate_calc;
     int has_start = 0, has_end = interval->has_end && !interval->end_is_offset;
-    int cbr = 1;
+    int cbr = 1, cbr_d = 1;
 
     av_init_packet(&pkt);
 
@@ -2860,11 +2861,6 @@ static int read_interval_packets(SCTE35Dictionary* dict, DynamicIntArray* arr, W
         av_packet_unref(&pkt);
     }
 
-    if(cbr && strcmp(print_format, "json"))
-        printf("\nStream has constant bit rate\n");
-    else
-        printf("\nStream does not have constant bit rate\n\n");
-
     av_init_packet(&pkt);
     pkt.data = NULL;
     pkt.size = 0;
@@ -2872,8 +2868,13 @@ static int read_interval_packets(SCTE35Dictionary* dict, DynamicIntArray* arr, W
     for (i = 0; i < fmt_ctx->nb_streams; i++) {
         pkt.stream_index = i;
         if (do_read_frames)
-            while (process_frame(dict, arr, com, w, ifile, frame, &pkt, &(int){1}, bit_rate_calc, &cbr) > 0);
+            while (process_frame(dict, arr, com, w, ifile, frame, &pkt, &(int){1}, bit_rate_calc, &cbr_d) > 0);
     }
+
+    if(cbr && strcmp(print_format, "json"))
+        printf("\nStream has constant bit rate\n");
+    else
+        printf("\nStream does not have constant bit rate\n\n");
 
 end:
     av_frame_free(&frame); 
@@ -3546,6 +3547,7 @@ static int scan_interval_packets(SCTE35Dictionary* dict, DynamicIntArray* arr, I
 
     fmt_ctx->cur_packet_num = 0;
 
+    // sanity check
     free_queue(fmt_ctx->last_pcr_queue);
 
     if (interval->has_start) {
