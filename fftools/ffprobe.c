@@ -2871,10 +2871,13 @@ static int read_interval_packets(SCTE35Dictionary* dict, DynamicIntArray* arr, W
             while (process_frame(dict, arr, com, w, ifile, frame, &pkt, &(int){1}, bit_rate_calc, &cbr_d) > 0);
     }
 
-    if(cbr && strcmp(print_format, "json"))
-        printf("\nStream has constant bit rate\n");
-    else
-        printf("\nStream does not have constant bit rate\n\n");
+    if(strcmp(print_format, "json")) {
+        if (cbr)
+            printf("\nStream has constant bit rate\n");
+        else
+            printf("\nStream does not have constant bit rate\n\n");
+    }
+    
 
 end:
     av_frame_free(&frame); 
