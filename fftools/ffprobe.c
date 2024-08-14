@@ -2195,7 +2195,7 @@ static void show_scte35_packet(WriterContext *w, SCTE35ParseSection *scte35_ptr)
                 print_str("SCTE35_in_out_network", "IN");
             }
         } else {
-            print_ts("SCTE35_pts_time", scte35_ptr->cmd.time_signal.time.pts_time);
+            print_ts("pkt_pts", scte35_ptr->cmd.time_signal.time.pts_time);
             if (scte35_ptr->splice_descriptor.payload.seg_desc.segmentation_duration_flag)
                 print_int("SCTE35_duration", scte35_ptr->splice_descriptor.payload.seg_desc.segmentation_duration);
         }
