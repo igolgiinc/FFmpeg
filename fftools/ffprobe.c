@@ -2600,7 +2600,7 @@ static av_always_inline int process_frame(SCTE35Dictionary *dict, DynamicIntArra
 
             // fill out com struct when current SCTE35 packet is an INSERT
             if (scte35_parse->splice_command_type == SCTE35_CMD_INSERT) {
-                if ((scte35_parse->cmd.insert.time.pts_time - com->prev_scte35_pts) > (PTS_THRESHOLD)) {
+                if ((scte35_parse->cmd.insert.time.pts_time - com->prev_scte35_pts) > (PTS_THRESHOLD * 4)) {
                     com->scte35_count++;
                     if (scte35_parse->cmd.insert.out_of_network_indicator) {
                         com->search_out_IDR_flag = 1;
@@ -2713,7 +2713,7 @@ static av_always_inline int process_frame(SCTE35Dictionary *dict, DynamicIntArra
             }
         }
 
-        if (com->in_commercial_flag && com->auto_return_flag && frame->pts > com->expected_end_commercial_pts) 
+        if (com->in_commercial_flag && com->auto_return_flag && frame->pts >= com->expected_end_commercial_pts) 
             com->search_in_IDR_flag = 1;
 
         // After detecting a SCTE35 INSERT CUE-IN, we search for the next IDR frame
