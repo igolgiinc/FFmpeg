@@ -2293,6 +2293,9 @@ static void show_frame(WriterContext *w, AVFrame *frame, AVStream *stream,
 
     if (com->in_commercial_flag && com->duration_flag && frame->pts > com->begin_commercial_pts) {
         print_int("SCTE35_REMAINING", com->duration - (frame->pts - com->begin_commercial_pts));
+    }
+
+    if (com->in_commercial_flag) {
         print_str("network_status", "OUT");
     }
 
@@ -2597,21 +2600,24 @@ static av_always_inline int process_frame(SCTE35Dictionary *dict, DynamicIntArra
 
             // fill out com struct when current SCTE35 packet is an INSERT
             if (scte35_parse->splice_command_type == SCTE35_CMD_INSERT) {
-                if (scte35_parse->cmd.insert.out_of_network_indicator) {
-                    com->search_out_IDR_flag = 1;
-                    if (scte35_parse->cmd.insert.duration_flag) { 
-                        com->duration = scte35_parse->cmd.insert.break_duration.duration;
-                        com->duration_flag = 1;
-                        if (scte35_parse->cmd.insert.break_duration.auto_return) 	
-                            com->auto_return_flag = 1;
+                if ((scte35_parse->cmd.insert.time.pts_time - com->prev_scte35_pts) > (PTS_THRESHOLD)) {
+                    com->scte35_count++;
+                    if (scte35_parse->cmd.insert.out_of_network_indicator) {
+                        com->search_out_IDR_flag = 1;
+                        if (scte35_parse->cmd.insert.duration_flag) { 
+                            com->duration = scte35_parse->cmd.insert.break_duration.duration;
+                            com->duration_flag = 1;
+                            if (scte35_parse->cmd.insert.break_duration.auto_return) 	
+                                com->auto_return_flag = 1;
+                        }
+                        com->scte35_begin_commercial_pts = scte35_parse->cmd.insert.time.pts_time;
+                    } else {
+                        if (com->in_commercial_flag) {
+                            com->search_in_IDR_flag = 1;
+                        com->expected_end_commercial_pts = scte35_parse->cmd.insert.time.pts_time;
+                        }
                     }
-                    
-                    com->scte35_begin_commercial_pts = scte35_parse->cmd.insert.time.pts_time;
-                } else {
-                    if (com->in_commercial_flag) {
-                        com->search_in_IDR_flag = 1;
-                    com->expected_end_commercial_pts = scte35_parse->cmd.insert.time.pts_time;
-                    }
+                    com->prev_scte35_pts = scte35_parse->cmd.insert.time.pts_time;
                 }
             }
 
@@ -2620,20 +2626,28 @@ static av_always_inline int process_frame(SCTE35Dictionary *dict, DynamicIntArra
             delta_t /= (scte35_parse->next_pcr_packet_num - scte35_parse->last_pcr_packet_num);
             scte35_parse->cur_pcr = (scte35_parse->last_pcr + delta_t) / 300;
 
-            /*
             if (scte35_parse->splice_command_type == SCTE35_CMD_TIME_SIGNAL) {
-                if (scte35_parse->splice_descriptor.payload.seg_desc.segmentation_duration_flag) {
-                    com->search_out_IDR_flag = 1;
-                    com->duration = scte35_parse->splice_descriptor.payload.seg_desc.segmentation_duration;
-                    com->duration_flag = 1;
-                    com->scte35_begin_commercial_pts = scte35_parse->cur_pcr;
-                } else {
-                    if (com->in_commercial_flag) {
-                        com->search_in_IDR_flag = 1;
-                    com->expected_end_commercial_pts = scte35_parse->cur_pcr;
+                if ((scte35_parse->cmd.time_signal.time.pts_time - com->prev_scte35_pts) > (PTS_THRESHOLD * 4)) {
+                    com->scte35_count++;
+                    if (scte35_parse->splice_descriptor.payload.seg_desc.segmentation_duration_flag) {
+                        com->search_out_IDR_flag = 1;
+                        com->duration = scte35_parse->splice_descriptor.payload.seg_desc.segmentation_duration;
+                        com->duration_flag = 1;
+                        com->scte35_begin_commercial_pts = scte35_parse->cmd.time_signal.time.pts_time;
+                    } else {
+                        if (com->in_commercial_flag) {
+                            com->search_in_IDR_flag = 1;
+                            com->expected_end_commercial_pts = scte35_parse->cmd.time_signal.time.pts_time;
+                        } else {
+                            if (com->scte35_count % 2 == 1){
+                                com->search_out_IDR_flag = 1;
+                                com->scte35_begin_commercial_pts = scte35_parse->cmd.time_signal.time.pts_time;
+                            }
+                        }
                     }
+                    com->prev_scte35_pts = scte35_parse->cmd.time_signal.time.pts_time;
                 }
-            }*/
+            }
 
             show_scte35_packet(w, scte35_parse);  
             // have to free SCTE35ParseSection object since it was malloc'd
@@ -2690,7 +2704,7 @@ static av_always_inline int process_frame(SCTE35Dictionary *dict, DynamicIntArra
 
         // After detecting a SCTE35 INSERT CUE-OUT, we search for next IDR frame
         if (com->search_out_IDR_flag) {
-            if (av_get_picture_type_char(frame->pict_type) == 'I' && frame->key_frame && frame->pts > com->scte35_begin_commercial_pts) {
+            if (av_get_picture_type_char(frame->pict_type) == 'I' && frame->key_frame && frame->pts >= com->scte35_begin_commercial_pts) {
                 com->search_out_IDR_flag = 0;
                 com->in_commercial_flag = 1;
                 com->begin_commercial_pts = frame->pts;
@@ -2704,7 +2718,7 @@ static av_always_inline int process_frame(SCTE35Dictionary *dict, DynamicIntArra
 
         // After detecting a SCTE35 INSERT CUE-IN, we search for the next IDR frame
         if (com->search_in_IDR_flag) {
-            if (av_get_picture_type_char(frame->pict_type) == 'I' && frame->key_frame && frame->pts > com->expected_end_commercial_pts) {
+            if (av_get_picture_type_char(frame->pict_type) == 'I' && frame->key_frame && frame->pts >= com->expected_end_commercial_pts) {
                 com->search_in_IDR_flag = 0;
                 com->in_commercial_flag = 0;
                 com->end_commercial_pts = frame->pts;

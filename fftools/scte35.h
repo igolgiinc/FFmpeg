@@ -9,6 +9,7 @@
 #define SPLICE_INFO_FIXED_SIZE 14
 #define MAX_SCTE35_SPLICE_COMPONENTS 10
 #define SPLICE_DESCRIPTOR_DATA_MAX_SIZE 256
+#define PTS_THRESHOLD 18000
 
 // values for types of errors in scte35.c
 enum 
@@ -206,10 +207,12 @@ typedef struct SCTE35CommercialStruct
     int auto_return_flag;
     int duration_flag;
     int duration;
+    int scte35_count;
     int64_t scte35_begin_commercial_pts;
     int64_t begin_commercial_pts;
     int64_t expected_end_commercial_pts;
     int64_t end_commercial_pts;
+    int64_t prev_scte35_pts;
 } SCTE35CommercialStruct;
 
 
