@@ -2218,6 +2218,10 @@ static void show_scte35_packet(WriterContext *w, SCTE35ParseSection *scte35_ptr)
         //}
     } else {
         print_str("PCR", "N/A");
+        print_str("SCTE35_cmd_type", command_type_str);
+        print_int("packet_num", scte35_ptr->cur_packet_num);
+        if (strcmp(print_format, "json"))
+            printf("\n");
     }
 
     writer_print_section_footer(w);
