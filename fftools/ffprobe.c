@@ -2604,23 +2604,30 @@ static av_always_inline int process_frame(SCTE35Dictionary *dict, DynamicIntArra
 
             // fill out com struct when current SCTE35 packet is an INSERT
             if (scte35_parse->splice_command_type == SCTE35_CMD_INSERT) {
+                // check to not count duplicate SCTE35 messages multiple times for commercial detection
                 if ((scte35_parse->cmd.insert.time.pts_time - com->prev_scte35_pts) > (PTS_THRESHOLD * 4)) {
                     com->scte35_count++;
+                    // in the case we are going out of network, we want to search for the next IDR frame to splice out
                     if (scte35_parse->cmd.insert.out_of_network_indicator) {
                         com->search_out_IDR_flag = 1;
+                        // set duration and auto_return flag in com struct in case they are true
                         if (scte35_parse->cmd.insert.duration_flag) { 
                             com->duration = scte35_parse->cmd.insert.break_duration.duration;
                             com->duration_flag = 1;
                             if (scte35_parse->cmd.insert.break_duration.auto_return) 	
                                 com->auto_return_flag = 1;
                         }
+                        // set estimated commercial start time based on pts time stored in SCTE35 message
                         com->scte35_begin_commercial_pts = scte35_parse->cmd.insert.time.pts_time;
                     } else {
+                        // if in commercial and come across INSERT, begin to search for next IDR frame to splice in
                         if (com->in_commercial_flag) {
                             com->search_in_IDR_flag = 1;
+                        // set estimated commercial end time based on pts time stored in SCTE35 message
                         com->expected_end_commercial_pts = scte35_parse->cmd.insert.time.pts_time;
                         }
                     }
+                    // keep track of previous SCTE35 message time for check to avoid counting a duplicate message
                     com->prev_scte35_pts = scte35_parse->cmd.insert.time.pts_time;
                 }
             }
@@ -2630,25 +2637,31 @@ static av_always_inline int process_frame(SCTE35Dictionary *dict, DynamicIntArra
             delta_t /= (scte35_parse->next_pcr_packet_num - scte35_parse->last_pcr_packet_num);
             scte35_parse->cur_pcr = (scte35_parse->last_pcr + delta_t) / 300;
 
+            // update com struct when SCTE35 message is TIME_SIGNAL
             if (scte35_parse->splice_command_type == SCTE35_CMD_TIME_SIGNAL) {
+                // check to not count duplicate SCTE35 messages multiple times for commercial detection
                 if ((scte35_parse->cmd.time_signal.time.pts_time - com->prev_scte35_pts) > (PTS_THRESHOLD * 4)) {
                     com->scte35_count++;
+                    // assume in case their is seg duration that we are going out of network
                     if (scte35_parse->splice_descriptor.payload.seg_desc.segmentation_duration_flag) {
                         com->search_out_IDR_flag = 1;
                         com->duration = scte35_parse->splice_descriptor.payload.seg_desc.segmentation_duration;
                         com->duration_flag = 1;
                         com->scte35_begin_commercial_pts = scte35_parse->cmd.time_signal.time.pts_time;
                     } else {
+                        // assume if we are in commercial we are going back into network
                         if (com->in_commercial_flag) {
                             com->search_in_IDR_flag = 1;
                             com->expected_end_commercial_pts = scte35_parse->cmd.time_signal.time.pts_time;
                         } else {
+                            // if we are not in commercial and the SCTE35 message count is odd, we assume we are going out of network
                             if (com->scte35_count % 2 == 1){
                                 com->search_out_IDR_flag = 1;
                                 com->scte35_begin_commercial_pts = scte35_parse->cmd.time_signal.time.pts_time;
                             }
                         }
                     }
+                    // keep track of previous SCTE35 message time to check for duplicate messages
                     com->prev_scte35_pts = scte35_parse->cmd.time_signal.time.pts_time;
                 }
             }
