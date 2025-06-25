@@ -1,0 +1,3 @@
+[submodule "nvcodec/nv-codec-headers"]
+	path = nvcodec/nv-codec-headers
+	url = git@github.com:igolgiinc/nv-codec-headers.git
