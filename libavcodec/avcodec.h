@@ -1241,6 +1241,8 @@ typedef struct AVCodecContext {
      */
     int rc_initial_buffer_occupancy;
 
+    float rc_filler_activation;
+
     /**
      * trellis RD quantization
      * - encoding: Set by user.

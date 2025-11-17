@@ -585,6 +585,16 @@ int ff_encode_preinit(AVCodecContext *avctx)
     if (!avctx->rc_initial_buffer_occupancy)
         avctx->rc_initial_buffer_occupancy = avctx->rc_buffer_size * 3LL / 4;
 
+    if ((avctx->codec_id == AV_CODEC_ID_MPEG1VIDEO) || (avctx->codec_id == AV_CODEC_ID_MPEG2VIDEO)) {
+        if (avctx->rc_filler_activation < 0) {
+            avctx->rc_filler_activation = -1;
+        } else {
+            avctx->rc_filler_activation = (avctx->rc_filler_activation > 1 ? 1 : avctx->rc_filler_activation);
+        }
+    } else {
+        avctx->rc_filler_activation = -1;
+    }
+
     if (avctx->codec_descriptor->props & AV_CODEC_PROP_INTRA_ONLY)
         avctx->internal->intra_only_flag = AV_PKT_FLAG_KEY;
 

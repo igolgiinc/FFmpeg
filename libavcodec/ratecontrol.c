@@ -540,6 +540,8 @@ av_cold int ff_rate_control_init(MpegEncContext *s)
     if (!rcc->buffer_index)
         rcc->buffer_index = s->avctx->rc_buffer_size * 3 / 4;
 
+    rcc->filler_activation = s->avctx->rc_filler_activation;
+
     if (s->avctx->flags & AV_CODEC_FLAG_PASS2) {
         int i;
         char *p;
@@ -677,6 +679,9 @@ av_cold void ff_rate_control_uninit(MpegEncContext *s)
     av_freep(&rcc->entry);
 }
 
+#define RC_FILLER_MPEG12_FACTOR_CURVE_FAMILY_PARAM_A            8
+#define RC_FILLER_MPEG12_FACTOR_CURVE_FAMILY_PARAM_B            3
+
 int ff_vbv_update(MpegEncContext *s, int frame_size)
 {
     RateControlContext *rcc = &s->rc_context;
@@ -688,23 +693,62 @@ int ff_vbv_update(MpegEncContext *s, int frame_size)
     ff_dlog(s, "%d %f %d %f %f\n",
             buffer_size, rcc->buffer_index, frame_size, min_rate, max_rate);
 
+    ff_dlog(s, "ff_vbv_update - 0 - level=%010.1f buffer=%08d frame=%08d target(min..max)=%010.1f..%010.1f\n", rcc->buffer_index, buffer_size, frame_size, min_rate, max_rate);
+
+    int filler = 0;
+    int stuffing = 0;
+
     if (buffer_size) {
         int left;
 
         rcc->buffer_index -= frame_size;
+
+        ff_dlog(s, "ff_vbv_update - 1 - level=%010.1f\n", rcc->buffer_index);
+
         if (rcc->buffer_index < 0) {
             av_log(s->avctx, AV_LOG_ERROR, "rc buffer underflow\n");
             if (frame_size > max_rate && s->qscale == s->avctx->qmax) {
                 av_log(s->avctx, AV_LOG_ERROR, "max bitrate possibly too small or try trellis with large lmax or increase qmax\n");
             }
             rcc->buffer_index = 0;
+        } else {
+
+            if (rcc->filler_activation > 0) {
+                if ((s->codec_id == AV_CODEC_ID_MPEG1VIDEO) || (s->codec_id == AV_CODEC_ID_MPEG2VIDEO)) {
+                    if (frame_size < min_rate) {
+                        double buffer_fullness = (double)(rcc->buffer_index + max_rate) / (double)buffer_size;
+                        buffer_fullness = (buffer_fullness < 0 ? 0 : (buffer_fullness > 1 ? 1 : buffer_fullness));
+                        double filler_factor = 0;
+                        if (rcc->filler_activation >= 0.5) {
+                            double gamma = pow (2 * (rcc->filler_activation - 0.5), RC_FILLER_MPEG12_FACTOR_CURVE_FAMILY_PARAM_B);
+                            double power = 1.0 / pow (2.0, gamma * RC_FILLER_MPEG12_FACTOR_CURVE_FAMILY_PARAM_A);
+                            filler_factor = pow (buffer_fullness, power);
+                        } else {
+                            double gamma = pow (1.0 - 2 * rcc->filler_activation, RC_FILLER_MPEG12_FACTOR_CURVE_FAMILY_PARAM_B);
+                            double power = pow (2.0, gamma * RC_FILLER_MPEG12_FACTOR_CURVE_FAMILY_PARAM_A);
+                            filler_factor = pow (buffer_fullness, power);
+                        }
+                        int filler_bits = (int)((min_rate - frame_size) * filler_factor);
+                        filler_bits = av_clip(filler_bits, 0, rcc->buffer_index);
+                        if (filler_bits >= 8) {
+                            filler = filler_bits / 8;
+                            filler_bits = 8 * filler;
+                            rcc->buffer_index -= filler_bits;
+
+                            ff_dlog(s, "ff_vbv_update - 2 - level=%010.1f fullness=%.2f filler_factor=%.2f filler=%08d\n", rcc->buffer_index, buffer_fullness, filler_factor, filler_bits);
+                        }
+                    }
+                }
+            } 
         }
 
         left = buffer_size - rcc->buffer_index - 1;
         rcc->buffer_index += av_clip(left, min_rate, max_rate);
 
+        ff_dlog(s, "ff_vbv_update - 3 - level=%010.1f\n", rcc->buffer_index);
+
         if (rcc->buffer_index > buffer_size) {
-            int stuffing = ceil((rcc->buffer_index - buffer_size) / 8);
+            stuffing = ceil((rcc->buffer_index - buffer_size) / 8);
 
             if (stuffing < 4 && s->codec_id == AV_CODEC_ID_MPEG4)
                 stuffing = 4;
@@ -713,10 +757,17 @@ int ff_vbv_update(MpegEncContext *s, int frame_size)
             if (s->avctx->debug & FF_DEBUG_RC)
                 av_log(s->avctx, AV_LOG_DEBUG, "stuffing %d bytes\n", stuffing);
 
-            return stuffing;
+            ff_dlog(s, "ff_vbv_update - 4 - level=%010.1f stuffing=%08d\n", rcc->buffer_index, 8*stuffing);
         }
     }
-    return 0;
+
+    if (rcc->filler_activation > 0) {
+        if (filler > 0) {
+            stuffing += filler;
+        }
+    }
+
+    return stuffing;
 }
 
 static double predict_size(Predictor *p, double q, double var)
