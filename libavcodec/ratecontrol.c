@@ -682,6 +682,10 @@ av_cold void ff_rate_control_uninit(MpegEncContext *s)
 #define RC_FILLER_MPEG12_FACTOR_CURVE_FAMILY_PARAM_A            8
 #define RC_FILLER_MPEG12_FACTOR_CURVE_FAMILY_PARAM_B            3
 
+#define RC_FILLER_MPEG12_TRACES_ENABLED                         0
+
+#include <syslog.h>
+
 int ff_vbv_update(MpegEncContext *s, int frame_size)
 {
     RateControlContext *rcc = &s->rc_context;
@@ -694,6 +698,9 @@ int ff_vbv_update(MpegEncContext *s, int frame_size)
             buffer_size, rcc->buffer_index, frame_size, min_rate, max_rate);
 
     ff_dlog(s, "ff_vbv_update - 0 - level=%010.1f buffer=%08d frame=%08d target(min..max)=%010.1f..%010.1f\n", rcc->buffer_index, buffer_size, frame_size, min_rate, max_rate);
+#if RC_FILLER_MPEG12_TRACES_ENABLED
+    syslog(LOG_ERR, "ff_vbv_update - 0 - level=%010.1f buffer=%08d frame=%08d target(min..max)=%010.1f..%010.1f\n", rcc->buffer_index, buffer_size, frame_size, min_rate, max_rate);
+#endif
 
     int filler = 0;
     int stuffing = 0;
@@ -704,6 +711,9 @@ int ff_vbv_update(MpegEncContext *s, int frame_size)
         rcc->buffer_index -= frame_size;
 
         ff_dlog(s, "ff_vbv_update - 1 - level=%010.1f\n", rcc->buffer_index);
+#if RC_FILLER_MPEG12_TRACES_ENABLED
+        syslog(LOG_ERR, "ff_vbv_update - 1 - level=%010.1f\n", rcc->buffer_index);
+#endif
 
         if (rcc->buffer_index < 0) {
             av_log(s->avctx, AV_LOG_ERROR, "rc buffer underflow\n");
@@ -736,6 +746,9 @@ int ff_vbv_update(MpegEncContext *s, int frame_size)
                             rcc->buffer_index -= filler_bits;
 
                             ff_dlog(s, "ff_vbv_update - 2 - level=%010.1f fullness=%.2f filler_factor=%.2f filler=%08d\n", rcc->buffer_index, buffer_fullness, filler_factor, filler_bits);
+#if RC_FILLER_MPEG12_TRACES_ENABLED
+                            syslog(LOG_ERR, "ff_vbv_update - 2 - level=%010.1f fullness=%.2f filler_factor=%.2f filler=%08d\n", rcc->buffer_index, buffer_fullness, filler_factor, filler_bits);
+#endif
                         }
                     }
                 }
@@ -746,6 +759,9 @@ int ff_vbv_update(MpegEncContext *s, int frame_size)
         rcc->buffer_index += av_clip(left, min_rate, max_rate);
 
         ff_dlog(s, "ff_vbv_update - 3 - level=%010.1f\n", rcc->buffer_index);
+#if RC_FILLER_MPEG12_TRACES_ENABLED
+        syslog(LOG_ERR, "ff_vbv_update - 3 - level=%010.1f\n", rcc->buffer_index);
+#endif
 
         if (rcc->buffer_index > buffer_size) {
             stuffing = ceil((rcc->buffer_index - buffer_size) / 8);
@@ -758,6 +774,9 @@ int ff_vbv_update(MpegEncContext *s, int frame_size)
                 av_log(s->avctx, AV_LOG_DEBUG, "stuffing %d bytes\n", stuffing);
 
             ff_dlog(s, "ff_vbv_update - 4 - level=%010.1f stuffing=%08d\n", rcc->buffer_index, 8*stuffing);
+#if RC_FILLER_MPEG12_TRACES_ENABLED
+            syslog(LOG_ERR, "ff_vbv_update - 4 - level=%010.1f stuffing=%08d\n", rcc->buffer_index, 8*stuffing);
+#endif
         }
     }
 
